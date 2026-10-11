@@ -53,7 +53,7 @@ PROPHETS = [
     "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
     "Zakariya", "Yahya", "Isa", "Muhammad",
 ]
-START = datetime.date(2026, 10, 12)  # day 0 = Adam, then one prophet per day
+START = datetime.date(2026, 10, 12)  # day 1 = Adam, then one prophet per day
 
 
 def todays_prophet():
