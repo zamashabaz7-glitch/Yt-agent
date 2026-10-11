@@ -14,7 +14,6 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
 GEO = os.getenv("GEO", "IN")
 PRIVACY = os.getenv("PRIVACY", "private")
-MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 VOICE = os.getenv("VOICE", "en-US-AriaNeural")
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 OUT = "work"
@@ -30,6 +29,34 @@ def get_trend():
     return feed.entries[0].title
 
 
+def pick_models():
+    """Ask Google which models exist, so retired model names can't break us."""
+    names = []
+    if os.getenv("GEMINI_MODEL"):
+        names.append(os.environ["GEMINI_MODEL"])
+    try:
+        r = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
+        found = []
+        for m in r.json().get("models", []):
+            n = m["name"].split("/")[-1]
+            ok = "generateContent" in m.get("supportedGenerationMethods", [])
+            bad = any(x in n for x in ("image", "tts", "live", "audio", "preview", "exp", "lite", "latest"))
+            if ok and n.startswith("gemini") and "flash" in n and not bad:
+                found.append(n)
+        names += sorted(found, reverse=True)
+    except Exception as e:
+        print("Could not list models:", e)
+    names += ["gemini-2.5-flash", "gemini-3.8-flash"]
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out[:3]
+
+
 def write_script(topic):
     prompt = (
         f"Write a 45-second YouTube Shorts script about the trending topic: '{topic}'. "
@@ -38,24 +65,38 @@ def write_script(topic):
         "title (max 80 chars), description, script (spoken text only), "
         "keywords (4 short English stock-footage search terms)."
     )
-    for attempt in range(6):
-        r = requests.post(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
-            params={"key": GEMINI_KEY},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json"},
-            },
-            timeout=90,
-        )
-        if r.ok:
-            return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
-        if r.status_code in (429, 500, 503):
-            print(f"Gemini busy ({r.status_code}), retry {attempt + 1}/6")
-            time.sleep(15 * (attempt + 1))
-            continue
-        raise RuntimeError(f"Gemini error {r.status_code}: {r.text[:500]}")
-    raise RuntimeError("Gemini stayed unavailable after 6 tries")
+    last = ""
+    for model in pick_models():
+        print("Trying model:", model)
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    params={"key": GEMINI_KEY},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json"},
+                    },
+                    timeout=100,
+                )
+            except requests.exceptions.RequestException as e:
+                last = f"{model}: {e}"
+                print("Network/timeout:", last)
+                time.sleep(10)
+                continue
+            if r.ok:
+                try:
+                    return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+                except Exception as e:
+                    last = f"{model}: bad response {e}"
+                    continue
+            last = f"{model}: {r.status_code} {r.text[:300]}"
+            print("Gemini problem:", last)
+            if r.status_code in (429, 500, 503):
+                time.sleep(15)
+                continue
+            break  # 400/404 etc: try the next model
+    raise RuntimeError("All Gemini models failed. Last: " + last)
 
 
 def make_voice(text, path):
