@@ -48,13 +48,13 @@ def pick_models():
         names += sorted(found, reverse=True)
     except Exception as e:
         print("Could not list models:", e)
-    names += ["gemini-2.5-flash", "gemini-3.8-flash"]
+    names += ["gemini-3.8-flash", "gemini-2.5-flash"]
     seen, out = set(), []
     for n in names:
         if n not in seen:
             seen.add(n)
             out.append(n)
-    return out[:3]
+    return out[:6]
 
 
 def write_script(topic):
@@ -68,7 +68,7 @@ def write_script(topic):
     last = ""
     for model in pick_models():
         print("Trying model:", model)
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 r = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -92,10 +92,10 @@ def write_script(topic):
                     continue
             last = f"{model}: {r.status_code} {r.text[:300]}"
             print("Gemini problem:", last)
-            if r.status_code in (429, 500, 503):
-                time.sleep(15)
+            if r.status_code in (500, 503):
+                time.sleep(20 * (attempt + 1))  # overloaded: wait longer, retry
                 continue
-            break  # 400/404 etc: try the next model
+            break  # 429 quota / 400 / 404: go to the next model
     raise RuntimeError("All Gemini models failed. Last: " + last)
 
 
@@ -156,7 +156,7 @@ def build_video(keywords, audio, out):
 def youtube():
     creds = Credentials(
         None,
-                refresh_token=os.environ["YT_REFRESH_TOKEN"].strip(),
+        refresh_token=os.environ["YT_REFRESH_TOKEN"].strip(),
         client_id=os.environ["YT_CLIENT_ID"].strip(),
         client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
         token_uri="https://oauth2.googleapis.com/token",
