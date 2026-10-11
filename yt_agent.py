@@ -50,3 +50,12 @@ def write_script(topic):
     if not r.ok:
         raise RuntimeError(f"Gemini error {r.status_code}: {r.text[:500]}")
     return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+
+if __name__ == "__main__":
+    topic = get_trend()
+    print("Trend:", topic)
+    meta = write_script(topic)
+    make_voice(meta["script"], f"{OUT}/voice.mp3")
+    build_video(meta["keywords"], f"{OUT}/voice.mp3", f"{OUT}/final.mp4")
+    vid = upload(f"{OUT}/final.mp4", meta)
+    print("Uploaded: https://youtube.com/watch?v=" + vid)
