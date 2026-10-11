@@ -3,7 +3,7 @@ Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actio
 Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
 Optional secrets: GROQ_API_KEY (backup AI), CF_ACCOUNT_ID + CF_API_TOKEN (free AI images)
-Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf)
+Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf), VOICE
 """
 import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
@@ -20,11 +20,20 @@ CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightn
 PRIVACY = os.getenv("PRIVACY", "private")
 VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
 LANG = os.getenv("LANG_CODE", "ur")
-STYLE = ("stylized 3D animated cartoon illustration, cinematic warm lighting, soft glow, "
-         "vertical composition, if a person appears it is a small robed figure seen only from "
-         "behind or as a silhouette, face never visible, no faces, no text, no letters")
-NEGATIVE = ("face, eyes, nose, mouth, front view, portrait, close-up of a person, "
-            "text, letters, watermark, realistic photo")
+
+# Cinematic dark-fantasy Islamic cartoon aesthetic styles
+STYLE = (
+    "epic cinematic dark fantasy 3D animation style, volumetric divine golden backlighting, "
+    "glowing ethereal light aura, dark mystical atmosphere, ultra-detailed textures, "
+    "vertical 9:16 aspect ratio, dramatic composition. A small robed figure seen strictly from behind "
+    "or as a silhouette, FACES ENTIRELY OBSCURED BY BRIGHT DIVINE LIGHT OR SHADOW, NO EYES, NO NOSE, "
+    "NO MOUTH, NO VISIBLE FACIAL FEATURES, no text, no modern elements."
+)
+NEGATIVE = (
+    "face, eyes, nose, mouth, visible facial features, portrait, close-up of a person, "
+    "modern clothes, text, letters, watermark, blurry, low resolution, 2D vector, anime drawing"
+)
+
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 OUT = "work"
 os.makedirs(OUT, exist_ok=True)
@@ -61,29 +70,25 @@ def build_prompt(name, episode):
         "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
         "respectful family audience.\n"
         f"Subject: Prophet {name} (peace be upon him). This is episode {episode} of the "
-        f"series about him: tell the number {episode} major event of his story in "
-        "chronological order (if he has fewer, pick a lesser-known event).\n"
+        f"series about him: tell the major event of his story in chronological order.\n"
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
         "Do NOT invent dialogue, names, numbers or details. If unsure, leave it out.\n"
         "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
-        "first time say the honorific (alayhis salaam in Urdu script; for Prophet "
-        "Muhammad say sallallahu alayhi wasallam in Urdu script).\n"
-        "- 90 to 110 words. Calm, respectful tone. Start with a hook. End with one "
-        "short lesson. No emojis, no hashtags, no stage directions.\n"
-        "- Never describe the prophet's face or appearance.\n"
-        "Return JSON with keys: topic (English), title_ur (Urdu, max 45 chars, includes "
-        "the prophet's name with honorific), description_ur (2 short Urdu sentences, then "
-        "'Source: ' followed by Surah names in English), script (Urdu narration only), "
-        "scenes (a list of exactly 6 objects in story order, each with image_prompt in "
-        "ENGLISH and stock_keyword in English). image_prompt describes one peaceful "
-        "scene of places, nature, objects and light, such as desert at sunrise, night "
-        "sky full of stars, a wooden ark on a calm sea, a well in the desert, a mountain "
-        "cave, olive trees, a river, rain clouds. If a person is needed for the story, "
-        "show at most ONE small robed figure seen only from behind or as a distant "
-        "silhouette, wide shot, face never visible. NEVER show any face, a front view, "
-        "or angels. stock_keyword is a 2-3 word nature or place version of the scene "
-        "with NO people, such as 'desert sunrise'."
+        "first time say the honorific (alayhis salaam in Urdu script).\n"
+        "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
+        "End with one short moral lesson. No emojis, no hashtags, no stage directions.\n"
+        "- NEVER describe or show the prophet's face or features.\n"
+        "Return JSON with keys:\n"
+        "- topic (English)\n"
+        "- title_ur (Urdu title, max 45 chars, includes prophet's name with honorific)\n"
+        "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
+        "- script (Urdu narration only)\n"
+        "- scenes (a list of 10 to 12 distinct scenes in story order, each with image_prompt in "
+        "ENGLISH and stock_keyword in English). image_prompt must describe a dramatic, high-detail "
+        "cinematic fantasy scene with strong lighting (e.g., golden heavenly light rays, dark stormy smoke, "
+        "cosmic dust, ancient desert landscapes). If a person appears, show ONLY a small robed figure "
+        "seen from behind or as a glowing silhouette with NO visible face."
     )
 
 
@@ -102,9 +107,9 @@ def parse_meta(text):
             "image_prompt": str(sc.get("image_prompt", "desert at sunrise")),
             "stock_keyword": str(sc.get("stock_keyword", "desert sunrise")),
         })
-    if len(scenes) < 3:
+    if len(scenes) < 4:
         raise ValueError("too few scenes")
-    data["scenes"] = scenes[:6]
+    data["scenes"] = scenes[:12]
     return data
 
 
@@ -126,7 +131,7 @@ def pick_gemini_models():
         names += sorted(found, reverse=True)
     except Exception as e:
         print("Could not list Gemini models:", e)
-    names += ["gemini-3.8-flash", "gemini-2.5-flash"]
+    names += ["gemini-2.5-flash", "gemini-3.8-flash"]
     seen, out = set(), []
     for n in names:
         if n not in seen:
@@ -167,7 +172,7 @@ def ask_gemini(prompt):
             if r.status_code in (500, 503):
                 time.sleep(20 * (attempt + 1))
                 continue
-            break  # 429 quota / 400 / 404: next model
+            break
     print("Gemini failed. Last:", last)
     return None
 
@@ -230,7 +235,7 @@ def write_script(name, episode):
     prompt = build_prompt(name, episode)
     meta = ask_gemini(prompt) or ask_groq(prompt)
     if not meta:
-        raise RuntimeError("Gemini and the backup AI both failed. Try again later.")
+        raise RuntimeError("Gemini and backup AI both failed.")
     meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS)"
     return meta
 
@@ -253,14 +258,13 @@ async def _tts(text, path):
 
 
 def make_voice(text, path):
-    """Returns word timings, or [] if the voice engine gave none."""
     try:
         words = asyncio.run(_tts(text, path))
         if os.path.getsize(path) > 1000:
             return words
     except Exception as e:
         print("edge-tts failed, using gTTS:", e)
-    from gtts import gTTS  # fallback if Microsoft blocks cloud IPs
+    from gtts import gTTS
     gTTS(text, lang=LANG).save(path)
     return []
 
@@ -281,8 +285,8 @@ def _ts(t):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def make_srt(words, text, total, path, per_line=4):
-    if not words:  # no timings: spread words over the audio by length
+def make_srt(words, text, total, path, per_line=3):
+    if not words:
         toks = text.split()
         weights = [len(w) + 1 for w in toks]
         scale = total / max(sum(weights), 1)
@@ -302,12 +306,11 @@ def make_srt(words, text, total, path, per_line=4):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
 
 
-# ---------- 4. Video (AI cartoon images, stock footage as backup) ----------
-DEAD = set()  # image providers that failed hard this run (do not retry them)
+# ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
+DEAD = set()
 
 
 def cf_image(full):
-    """Cloudflare Workers AI (free daily allowance). Returns image bytes or None."""
     if not (CF_ACCOUNT and CF_TOKEN) or "cf" in DEAD:
         return None
     r = requests.post(
@@ -327,12 +330,10 @@ def cf_image(full):
     data = r.json().get("result", {})
     if data.get("image"):
         return base64.b64decode(data["image"])
-    print("Cloudflare gave no image")
     return None
 
 
 def gemini_image(full):
-    """Gemini image models on your existing key (may have no free quota). Bytes or None."""
     if "gem" in DEAD:
         return None
     if not hasattr(gemini_image, "models"):
@@ -360,9 +361,7 @@ def gemini_image(full):
                 inline = part.get("inlineData") or part.get("inline_data")
                 if inline and inline.get("data"):
                     return base64.b64decode(inline["data"])
-            print("Gemini image gave no picture:", model)
         else:
-            print("Gemini image problem:", model, r.status_code, r.text[:150])
             if r.status_code in (400, 403, 404, 429):
                 continue
     DEAD.add("gem")
@@ -370,7 +369,6 @@ def gemini_image(full):
 
 
 def make_image(prompt, i):
-    """Make one cartoon image. Returns a file path, or None to use stock footage."""
     full = f"{STYLE}. {prompt}"
     path = f"{OUT}/img{i}.img"
     for fn in (cf_image, gemini_image):
@@ -382,7 +380,7 @@ def make_image(prompt, i):
         if data and len(data) > 5000:
             with open(path, "wb") as f:
                 f.write(data)
-            print("Image", i, "made by", fn.__name__)
+            print("Image", i, "generated by", fn.__name__)
             return path
     return None
 
@@ -408,12 +406,12 @@ def fetch_clip(keyword, i):
 
 
 def image_clip(img, seg, out, i=0):
-    frames = max(int(seg * 30), 30)
-    if i % 2 == 0:   # slow zoom in
-        z = f"1+0.2*on/{frames}"
-    else:            # slow zoom out
-        z = f"1.2-0.2*on/{frames}"
-    x_expr = "0" if i % 3 == 0 else "iw/2-(iw/zoom/2)"
+    frames = max(int(seg * 30), 45)
+    if i % 2 == 0:
+        z = f"1+0.15*on/{frames}"
+    else:
+        z = f"1.15-0.15*on/{frames}"
+    x_expr = "iw/2-(iw/zoom/2)"
     run(["ffmpeg", "-y", "-i", img, "-vf",
          "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
          f"zoompan=z='{z}':x='{x_expr}':y='ih/2-(ih/zoom/2)'"
@@ -436,35 +434,36 @@ def build_video(scenes, audio, srt, out):
         if img:
             image_clip(img, seg, p, i)
         else:
-            print("Using stock footage for scene", i)
+            print("Using stock backup clip for scene", i)
             raw = None
             for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
                 try:
                     raw = fetch_clip(kw, i)
                 except Exception as e:
-                    print("Clip problem for", kw, e)
+                    print("Clip error:", e)
                 if raw:
                     break
             if not raw:
-                raise RuntimeError("No image and no stock clip for scene %d" % i)
+                raise RuntimeError("No image or stock clip for scene %d" % i)
             stock_clip(raw, seg, p)
         parts.append(p)
-        time.sleep(2)
+        time.sleep(1)
     with open(f"{OUT}/list.txt", "w") as f:
         f.writelines(f"file '{os.path.abspath(p)}'\n" for p in parts)
     base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
             "-i", audio, "-map", "0:v", "-map", "1:a"]
     tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
-    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=13,Bold=1,"
-             "Outline=2,Shadow=0,MarginV=45")
+    # Cinematic subtitle styles with black outline and soft shadow effect
+    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=14,PrimaryColour=&H00FFFFFF,"
+             "OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=60")
     try:
         run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
     except subprocess.CalledProcessError:
-        print("Subtitles failed, building video without them")
+        print("Subtitles failed, building without them")
         run(base + tail)
 
 
-# ---------- 5. YouTube ----------
+# ---------- 5. YouTube Upload ----------
 def youtube():
     creds = Credentials(
         None,
@@ -479,13 +478,12 @@ def youtube():
 
 
 def upload(path, meta, name):
-    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories", "Islamic History"]
     body = {
         "snippet": {
             "title": meta["title"][:88] + " #Shorts",
             "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
-                           "in Urdu. AI-assisted narration and images; please correct us if we "
-                           "make a mistake. #Shorts #IslamicStories #Prophets #Urdu",
+                           "in Urdu with cinematic visuals. #Shorts #IslamicStories #Prophets #Urdu",
             "tags": tags,
             "categoryId": "27",
             "defaultAudioLanguage": "ur",
