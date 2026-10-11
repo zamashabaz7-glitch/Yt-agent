@@ -39,3 +39,14 @@ def write_script(topic):
         "keywords (4 short English stock-footage search terms)."
     )
     r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
+        params={"key": GEMINI_KEY},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        },
+        timeout=60,
+    )
+    if not r.ok:
+        raise RuntimeError(f"Gemini error {r.status_code}: {r.text[:500]}")
+    return json.loads(r.json()["candidates"][0]["content"]["parts"][0]["text"])
