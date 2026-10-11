@@ -1,27 +1,70 @@
-name: Daily video
+name: Urdu Islamic Prophet Shorts - 3x Daily
+
 on:
   schedule:
-    - cron: "30 4 * * *"
-  workflow_dispatch:
+    # 1st Video: Morning (e.g., 6:00 AM UTC) -> BATCH_INDEX 0
+    - cron: '0 6 * * *'
+    
+    # 2nd Video: Afternoon (e.g., 12:00 PM UTC) -> BATCH_INDEX 1
+    - cron: '0 12 * * *'
+    
+    # 3rd Video: Evening (e.g., 6:00 PM UTC) -> BATCH_INDEX 2
+    - cron: '0 18 * * *'
+    
+  workflow_dispatch: # Allows manual testing anytime
+
 jobs:
-  run:
+  build-and-upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-core
-      - run: pip install -r requirements.txt
-      - run: python yt_agent.py
+          python-version: '3.10'
+
+      - name: Install system dependencies & fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-noto-core
+
+      - name: Install Python packages
+        run: |
+          pip install google-api-python-client google-auth-oauthlib requests edge-tts gTTS
+
+      - name: Determine Batch Index based on Trigger Time
+        id: set-batch
+        run: |
+          # Detects which cron trigger or manual click launched the workflow
+          CRON_HOUR=$(date -u +%H)
+          echo "Current UTC Hour: $CRON_HOUR"
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger: defaulting to batch 0"
+            echo "batch=0" >> $GITHUB_ENV
+          elif [ "$CRON_HOUR" -lt 10 ]; then
+            echo "Morning run -> Part 1"
+            echo "batch=0" >> $GITHUB_ENV
+          elif [ "$CRON_HOUR" -lt 15 ]; then
+            echo "Afternoon run -> Part 2"
+            echo "batch=1" >> $GITHUB_ENV
+          else
+            echo "Evening run -> Part 3"
+            echo "batch=2" >> $GITHUB_ENV
+          fi
+
+      - name: Run Agent Video Generator
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          PRIVACY: private
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          PRIVACY: "public" # Change to "private" if you want to review first
+          BATCH_INDEX: ${{ env.batch }}
+        run: python agent.py
