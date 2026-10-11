@@ -1,9 +1,10 @@
 """
 Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
+Supports multi-episode tracking per prophet and daily batch uploads (3 videos/day).
 Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secrets: GROQ_API_KEY (backup AI), CF_ACCOUNT_ID + CF_API_TOKEN (free AI images)
-Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf), VOICE
+Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN
+Optional env: PRIVACY, PROPHET, BATCH_INDEX (0, 1, or 2 for 3 videos/day)
 """
 import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
@@ -21,7 +22,9 @@ PRIVACY = os.getenv("PRIVACY", "private")
 VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
 LANG = os.getenv("LANG_CODE", "ur")
 
-# Cinematic dark-fantasy Islamic cartoon aesthetic styles
+# Total episodes assigned per prophet to thoroughly cover their story before switching
+EPISODES_PER_PROPHET = 5 
+
 STYLE = (
     "epic cinematic dark fantasy 3D animation style, volumetric divine golden backlighting, "
     "glowing ethereal light aura, dark mystical atmosphere, ultra-detailed textures, "
@@ -46,34 +49,50 @@ def run(cmd):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 
-# ---------- 1. Which prophet today ----------
+# ---------- 1. Sequential Prophet & Episode Logic (3 videos/day) ----------
 PROPHETS = [
     "Adam", "Idris", "Nuh", "Hud", "Salih", "Ibrahim", "Lut", "Ismail",
     "Ishaq", "Yaqub", "Yusuf", "Ayyub", "Shuayb", "Musa", "Harun",
     "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
     "Zakariya", "Yahya", "Isa", "Muhammad",
 ]
-START = datetime.date(2026, 10, 12)  # day 1 = Adam, then one prophet per day
+START = datetime.date(2026, 10, 12)  # Base start date
 
 
-def todays_prophet():
+def todays_prophets_and_episodes():
+    """
+    Calculates 3 unique sequence indices for the current day 
+    (e.g., Videos #1, #2, and #3 uploaded across 3 separate GitHub Action runs).
+    """
     forced = os.getenv("PROPHET", "").strip()
-    n = max((datetime.date.today() - START).days, 0)
-    name = forced if forced else PROPHETS[n % len(PROPHETS)]
-    episode = n // len(PROPHETS) + 1
+    days_elapsed = max((datetime.date.today() - START).days, 0)
+    
+    # Global video sequence index for today (supports 3 uploads per day)
+    # BATCH_INDEX can be passed via GitHub Actions matrix or workflow input (0, 1, or 2)
+    batch_idx = int(os.getenv("BATCH_INDEX", "0"))
+    absolute_video_index = (days_elapsed * 3) + batch_idx
+
+    if forced:
+        name = forced
+        episode = batch_idx + 1
+    else:
+        prophet_idx = (absolute_video_index // EPISODES_PER_PROPHET) % len(PROPHETS)
+        episode = (absolute_video_index % EPISODES_PER_PROPHET) + 1
+        name = PROPHETS[prophet_idx]
+
     return name, episode
 
 
-# ---------- 2. Script (Gemini, then Groq as backup) ----------
+# ---------- 2. Script Generation ----------
 def build_prompt(name, episode):
     return (
         "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
         "respectful family audience.\n"
-        f"Subject: Prophet {name} (peace be upon him). This is episode {episode} of the "
-        f"series about him: tell the major event of his story in chronological order.\n"
+        f"Subject: Prophet {name} (peace be upon him). This is PART {episode} of {EPISODES_PER_PROPHET} "
+        f"parts covering his complete life story sequentially. Tell this specific chapter of his journey.\n"
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
-        "Do NOT invent dialogue, names, numbers or details. If unsure, leave it out.\n"
+        "Do NOT invent dialogue, names, numbers or details.\n"
         "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
         "first time say the honorific (alayhis salaam in Urdu script).\n"
         "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
@@ -81,13 +100,12 @@ def build_prompt(name, episode):
         "- NEVER describe or show the prophet's face or features.\n"
         "Return JSON with keys:\n"
         "- topic (English)\n"
-        "- title_ur (Urdu title, max 45 chars, includes prophet's name with honorific)\n"
+        "- title_ur (Urdu title, max 45 chars, e.g. Part number and prophet's name with honorific)\n"
         "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
         "- script (Urdu narration only)\n"
         "- scenes (a list of 10 to 12 distinct scenes in story order, each with image_prompt in "
         "ENGLISH and stock_keyword in English). image_prompt must describe a dramatic, high-detail "
-        "cinematic fantasy scene with strong lighting (e.g., golden heavenly light rays, dark stormy smoke, "
-        "cosmic dust, ancient desert landscapes). If a person appears, show ONLY a small robed figure "
+        "cinematic fantasy scene with strong lighting. If a person appears, show ONLY a small robed figure "
         "seen from behind or as a glowing silhouette with NO visible face."
     )
 
@@ -179,55 +197,26 @@ def ask_gemini(prompt):
 
 def ask_groq(prompt):
     if not GROQ_KEY:
-        print("No GROQ_API_KEY set, skipping backup AI")
         return None
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-    cands = []
-    try:
-        r = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=30)
-        for m in r.json().get("data", []):
-            n = m["id"]
-            if "llama" in n and not any(x in n for x in ("guard", "whisper", "tts", "prompt")):
-                cands.append(n)
-        cands.sort(key=lambda n: (not ("70b" in n or "versatile" in n), n))
-    except Exception as e:
-        print("Could not list Groq models:", e)
-    cands = cands[:2] + ["llama-3.3-70b-versatile"]
-    seen, models = set(), []
-    for n in cands:
-        if n not in seen:
-            seen.add(n)
-            models.append(n)
-    for model in models:
-        print("Trying Groq model:", model)
-        for attempt in range(2):
-            try:
-                r = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers=headers,
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.7,
-                    },
-                    timeout=100,
-                )
-            except requests.exceptions.RequestException as e:
-                print("Groq network problem:", e)
-                time.sleep(10)
-                continue
+    cands = ["llama-3.3-70b-versatile"]
+    for model in cands:
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.7,
+                },
+                timeout=100,
+            )
             if r.ok:
-                try:
-                    return parse_meta(r.json()["choices"][0]["message"]["content"])
-                except Exception as e:
-                    print("Groq bad response:", e)
-                    break
-            print("Groq problem:", model, r.status_code, r.text[:200])
-            if r.status_code in (429, 500, 503):
-                time.sleep(15)
-                continue
-            break
+                return parse_meta(r.json()["choices"][0]["message"]["content"])
+        except Exception as e:
+            print("Groq error:", e)
     return None
 
 
@@ -236,11 +225,11 @@ def write_script(name, episode):
     meta = ask_gemini(prompt) or ask_groq(prompt)
     if not meta:
         raise RuntimeError("Gemini and backup AI both failed.")
-    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS)"
+    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
     return meta
 
 
-# ---------- 3. Voice + subtitles ----------
+# ---------- 3. Voice + Subtitles ----------
 async def _tts(text, path):
     try:
         comm = edge_tts.Communicate(text, VOICE, boundary="WordBoundary")
@@ -321,7 +310,6 @@ def cf_image(full):
         timeout=120,
     )
     if not r.ok:
-        print("Cloudflare image problem:", r.status_code, r.text[:200])
         if r.status_code in (400, 401, 403, 404, 429):
             DEAD.add("cf")
         return None
@@ -345,8 +333,8 @@ def gemini_image(full):
                 n = m["name"].split("/")[-1]
                 if "image" in n and "generateContent" in m.get("supportedGenerationMethods", []):
                     names.append(n)
-        except Exception as e:
-            print("Could not list Gemini image models:", e)
+        except Exception:
+            pass
         gemini_image.models = sorted(names, reverse=True)[:2]
     for model in gemini_image.models:
         r = requests.post(
@@ -361,9 +349,6 @@ def gemini_image(full):
                 inline = part.get("inlineData") or part.get("inline_data")
                 if inline and inline.get("data"):
                     return base64.b64decode(inline["data"])
-        else:
-            if r.status_code in (400, 403, 404, 429):
-                continue
     DEAD.add("gem")
     return None
 
@@ -374,13 +359,11 @@ def make_image(prompt, i):
     for fn in (cf_image, gemini_image):
         try:
             data = fn(full)
-        except Exception as e:
-            print("Image error:", fn.__name__, e)
+        except Exception:
             data = None
         if data and len(data) > 5000:
             with open(path, "wb") as f:
                 f.write(data)
-            print("Image", i, "generated by", fn.__name__)
             return path
     return None
 
@@ -407,10 +390,7 @@ def fetch_clip(keyword, i):
 
 def image_clip(img, seg, out, i=0):
     frames = max(int(seg * 30), 45)
-    if i % 2 == 0:
-        z = f"1+0.15*on/{frames}"
-    else:
-        z = f"1.15-0.15*on/{frames}"
+    z = f"1+0.15*on/{frames}" if i % 2 == 0 else f"1.15-0.15*on/{frames}"
     x_expr = "iw/2-(iw/zoom/2)"
     run(["ffmpeg", "-y", "-i", img, "-vf",
          "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
@@ -434,13 +414,12 @@ def build_video(scenes, audio, srt, out):
         if img:
             image_clip(img, seg, p, i)
         else:
-            print("Using stock backup clip for scene", i)
             raw = None
             for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
                 try:
                     raw = fetch_clip(kw, i)
-                except Exception as e:
-                    print("Clip error:", e)
+                except Exception:
+                    pass
                 if raw:
                     break
             if not raw:
@@ -453,13 +432,11 @@ def build_video(scenes, audio, srt, out):
     base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
             "-i", audio, "-map", "0:v", "-map", "1:a"]
     tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
-    # Cinematic subtitle styles with black outline and soft shadow effect
     style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=14,PrimaryColour=&H00FFFFFF,"
              "OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=60")
     try:
         run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
     except subprocess.CalledProcessError:
-        print("Subtitles failed, building without them")
         run(base + tail)
 
 
@@ -478,12 +455,11 @@ def youtube():
 
 
 def upload(path, meta, name):
-    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories", "Islamic History"]
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
     body = {
         "snippet": {
             "title": meta["title"][:88] + " #Shorts",
-            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
-                           "in Urdu with cinematic visuals. #Shorts #IslamicStories #Prophets #Urdu",
+            "description": meta["description_ur"] + "\n\nStories of the Prophets in Urdu. #Shorts #IslamicStories #Prophets",
             "tags": tags,
             "categoryId": "27",
             "defaultAudioLanguage": "ur",
@@ -504,8 +480,8 @@ def upload(path, meta, name):
 
 
 if __name__ == "__main__":
-    name, episode = todays_prophet()
-    print("Prophet:", name, "| episode", episode)
+    name, episode = todays_prophets_and_episodes()
+    print(f"Prophet: {name} | Part: {episode}")
     meta = write_script(name, episode)
     print("Story:", meta.get("topic"), "|", meta["title"])
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
