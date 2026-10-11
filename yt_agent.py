@@ -340,7 +340,7 @@ def gemini_image(full):
         try:
             r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
                              params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
-            for m in r.json().get("models", []):
+           for m in r.json().get("models", []):
                 n = m["name"].split("/")[-1]
                 if "image" in n and "generateContent" in m.get("supportedGenerationMethods", []):
                     names.append(n)
@@ -363,4 +363,156 @@ def gemini_image(full):
             print("Gemini image gave no picture:", model)
         else:
             print("Gemini image problem:", model, r.status_code, r.text[:150])
-            i
+            if r.status_code in (400, 403, 404, 429):
+                continue
+    DEAD.add("gem")
+    return None
+
+
+def make_image(prompt, i):
+    """Make one cartoon image. Returns a file path, or None to use stock footage."""
+    full = f"{STYLE}. {prompt}"
+    path = f"{OUT}/img{i}.img"
+    for fn in (cf_image, gemini_image):
+        try:
+            data = fn(full)
+        except Exception as e:
+            print("Image error:", fn.__name__, e)
+            data = None
+        if data and len(data) > 5000:
+            with open(path, "wb") as f:
+                f.write(data)
+            print("Image", i, "made by", fn.__name__)
+            return path
+    return None
+
+
+def fetch_clip(keyword, i):
+    r = requests.get(
+        "https://pixabay.com/api/videos/",
+        params={"key": PIXABAY_KEY, "q": keyword, "per_page": 3},
+        timeout=30,
+    )
+    r.raise_for_status()
+    hits = r.json().get("hits", [])
+    if not hits:
+        return None
+    v = hits[0]["videos"]
+    url = next((v[k]["url"] for k in ("large", "medium", "small") if v.get(k, {}).get("url")), None)
+    if not url:
+        return None
+    path = f"{OUT}/raw{i}.mp4"
+    with open(path, "wb") as f:
+        f.write(requests.get(url, timeout=180).content)
+    return path
+
+
+def image_clip(img, seg, out, i=0):
+    frames = max(int(seg * 30), 30)
+    if i % 2 == 0:   # slow zoom in
+        z = f"1+0.2*on/{frames}"
+    else:            # slow zoom out
+        z = f"1.2-0.2*on/{frames}"
+    x_expr = "0" if i % 3 == 0 else "iw/2-(iw/zoom/2)"
+    run(["ffmpeg", "-y", "-i", img, "-vf",
+         "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
+         f"zoompan=z='{z}':x='{x_expr}':y='ih/2-(ih/zoom/2)'"
+         f":d={frames}:s=1080x1920:fps=30",
+         "-t", f"{seg:.2f}", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
+
+
+def stock_clip(raw, seg, out):
+    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", raw, "-t", f"{seg:.2f}",
+         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,fps=30", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
+
+
+def build_video(scenes, audio, srt, out):
+    seg = audio_len(audio) / len(scenes) + 0.1
+    parts = []
+    for i, sc in enumerate(scenes):
+        p = f"{OUT}/seg{i}.mp4"
+        img = make_image(sc["image_prompt"], i)
+        if img:
+            image_clip(img, seg, p, i)
+        else:
+            print("Using stock footage for scene", i)
+            raw = None
+            for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
+                try:
+                    raw = fetch_clip(kw, i)
+                except Exception as e:
+                    print("Clip problem for", kw, e)
+                if raw:
+                    break
+            if not raw:
+                raise RuntimeError("No image and no stock clip for scene %d" % i)
+            stock_clip(raw, seg, p)
+        parts.append(p)
+        time.sleep(2)
+    with open(f"{OUT}/list.txt", "w") as f:
+        f.writelines(f"file '{os.path.abspath(p)}'\n" for p in parts)
+    base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
+            "-i", audio, "-map", "0:v", "-map", "1:a"]
+    tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
+    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=13,Bold=1,"
+             "Outline=2,Shadow=0,MarginV=45")
+    try:
+        run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
+    except subprocess.CalledProcessError:
+        print("Subtitles failed, building video without them")
+        run(base + tail)
+
+
+# ---------- 5. YouTube ----------
+def youtube():
+    creds = Credentials(
+        None,
+        refresh_token=os.environ["YT_REFRESH_TOKEN"].strip(),
+        client_id=os.environ["YT_CLIENT_ID"].strip(),
+        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return build("youtube", "v3", credentials=creds)
+
+
+def upload(path, meta, name):
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
+    body = {
+        "snippet": {
+            "title": meta["title"][:88] + " #Shorts",
+            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
+                           "in Urdu. AI-assisted narration and images; please correct us if we "
+                           "make a mistake. #Shorts #IslamicStories #Prophets #Urdu",
+            "tags": tags,
+            "categoryId": "27",
+            "defaultAudioLanguage": "ur",
+        },
+        "status": {
+            "privacyStatus": PRIVACY,
+            "selfDeclaredMadeForKids": False,
+            "containsSyntheticMedia": True,
+        },
+    }
+    req = youtube().videos().insert(
+        part="snippet,status", body=body,
+        media_body=MediaFileUpload(path, resumable=True))
+    resp = None
+    while resp is None:
+        _, resp = req.next_chunk()
+    return resp["id"]
+
+
+if __name__ == "__main__":
+    name, episode = todays_prophet()
+    print("Prophet:", name, "| episode", episode)
+    meta = write_script(name, episode)
+    print("Story:", meta.get("topic"), "|", meta["title"])
+    audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
+    words = make_voice(meta["script"], audio)
+    make_srt(words, meta["script"], audio_len(audio), srt)
+    build_video(meta["scenes"], audio, srt, final)
+    vid = upload(final, meta, name)
+    print("Uploaded: https://youtube.com/watch?v=" + vid)
