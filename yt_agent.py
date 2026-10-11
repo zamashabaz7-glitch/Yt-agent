@@ -154,7 +154,20 @@ def build_video(keywords, audio, out):
 
 
 def youtube():
-def youtube():
+    cid = os.environ["YT_CLIENT_ID"].strip()
+    tok = os.environ["YT_REFRESH_TOKEN"].strip()
+    print("client id starts:", cid[:25])
+    print("token starts:", tok[:4])
+    creds = Credentials(
+        None,
+        refresh_token=tok,
+        client_id=cid,
+        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
+        token_uri="https://oauth2.googleapis.com/token",
+        scopes=SCOPES,
+    )
+    creds.refresh(Request())
+    return build("youtube", "v3", credentials=creds)
     cid = os.environ["YT_CLIENT_ID"].strip()
     tok = os.environ["YT_REFRESH_TOKEN"].strip()
     print("client id starts:", cid[:25])
