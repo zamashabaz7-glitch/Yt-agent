@@ -2,11 +2,10 @@
 Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
 Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secret: GROQ_API_KEY (free backup AI)
+Optional secrets: GROQ_API_KEY (backup AI), CF_ACCOUNT_ID + CF_API_TOKEN (free AI images)
 Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf)
 """
-import asyncio, datetime, json, os, subprocess, time, requests, edge_tts
-from urllib.parse import quote
+import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -15,11 +14,17 @@ from googleapiclient.http import MediaFileUpload
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
+CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
+CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
 VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
 LANG = os.getenv("LANG_CODE", "ur")
-STYLE = ("children's storybook illustration, soft watercolor cartoon style, warm glowing "
-         "colors, vertical composition, no people, no human figures, no faces, no text, no letters")
+STYLE = ("stylized 3D animated cartoon illustration, cinematic warm lighting, soft glow, "
+         "vertical composition, if a person appears it is a small robed figure seen only from "
+         "behind or as a silhouette, face never visible, no faces, no text, no letters")
+NEGATIVE = ("face, eyes, nose, mouth, front view, portrait, close-up of a person, "
+            "text, letters, watermark, realistic photo")
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 OUT = "work"
 os.makedirs(OUT, exist_ok=True)
@@ -72,11 +77,13 @@ def build_prompt(name, episode):
         "'Source: ' followed by Surah names in English), script (Urdu narration only), "
         "scenes (a list of exactly 6 objects in story order, each with image_prompt in "
         "ENGLISH and stock_keyword in English). image_prompt describes one peaceful "
-        "scene made only of places, nature, objects and light, such as desert at "
-        "sunrise, night sky full of stars, a wooden ark on a calm sea, a well in the "
-        "desert, mountain cave, olive trees, a river, rain clouds. NEVER include people, "
-        "prophets, angels or faces. stock_keyword is a 2-3 word real-world version of "
-        "the scene, such as 'desert sunrise'."
+        "scene of places, nature, objects and light, such as desert at sunrise, night "
+        "sky full of stars, a wooden ark on a calm sea, a well in the desert, a mountain "
+        "cave, olive trees, a river, rain clouds. If a person is needed for the story, "
+        "show at most ONE small robed figure seen only from behind or as a distant "
+        "silhouette, wide shot, face never visible. NEVER show any face, a front view, "
+        "or angels. stock_keyword is a 2-3 word nature or place version of the scene "
+        "with NO people, such as 'desert sunrise'."
     )
 
 
@@ -296,149 +303,64 @@ def make_srt(words, text, total, path, per_line=4):
 
 
 # ---------- 4. Video (AI cartoon images, stock footage as backup) ----------
-def make_image(prompt, i):
-    """Free AI image (Pollinations, no key needed). Returns a file path or None."""
-    full = f"{STYLE}. {prompt}"
-    path = f"{OUT}/img{i}.jpg"
-    for attempt in range(3):
-        try:
-            r = requests.get(
-                "https://image.pollinations.ai/prompt/" + quote(full),
-                params={"width": 768, "height": 1344, "nologo": "true", "seed": 100 + i},
-                timeout=150,
-            )
-            if r.ok and r.headers.get("content-type", "").startswith("image") and len(r.content) > 20000:
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                return path
-            print("Image problem:", i, r.status_code, r.headers.get("content-type"))
-        except Exception as e:
-            print("Image error:", i, e)
-        time.sleep(10 * (attempt + 1))
+DEAD = set()  # image providers that failed hard this run (do not retry them)
+
+
+def cf_image(full):
+    """Cloudflare Workers AI (free daily allowance). Returns image bytes or None."""
+    if not (CF_ACCOUNT and CF_TOKEN) or "cf" in DEAD:
+        return None
+    r = requests.post(
+        f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/{CF_MODEL}",
+        headers={"Authorization": f"Bearer {CF_TOKEN}"},
+        json={"prompt": full, "negative_prompt": NEGATIVE, "width": 768, "height": 1344,
+              "num_steps": 8},
+        timeout=120,
+    )
+    if not r.ok:
+        print("Cloudflare image problem:", r.status_code, r.text[:200])
+        if r.status_code in (400, 401, 403, 404, 429):
+            DEAD.add("cf")
+        return None
+    if r.headers.get("content-type", "").startswith("image"):
+        return r.content
+    data = r.json().get("result", {})
+    if data.get("image"):
+        return base64.b64decode(data["image"])
+    print("Cloudflare gave no image")
     return None
 
 
-def fetch_clip(keyword, i):
-    r = requests.get(
-        "https://pixabay.com/api/videos/",
-        params={"key": PIXABAY_KEY, "q": keyword, "per_page": 3},
-        timeout=30,
-    )
-    r.raise_for_status()
-    hits = r.json().get("hits", [])
-    if not hits:
+def gemini_image(full):
+    """Gemini image models on your existing key (may have no free quota). Bytes or None."""
+    if "gem" in DEAD:
         return None
-    v = hits[0]["videos"]
-    url = next((v[k]["url"] for k in ("large", "medium", "small") if v.get(k, {}).get("url")), None)
-    if not url:
-        return None
-    path = f"{OUT}/raw{i}.mp4"
-    with open(path, "wb") as f:
-        f.write(requests.get(url, timeout=180).content)
-    return path
-
-
-def image_clip(img, seg, out):
-    frames = max(int(seg * 30), 30)
-    run(["ffmpeg", "-y", "-i", img, "-vf",
-         "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
-         f"zoompan=z='min(zoom+0.0006,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-         f":d={frames}:s=1080x1920:fps=30",
-         "-t", f"{seg:.2f}", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
-
-
-def stock_clip(raw, seg, out):
-    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", raw, "-t", f"{seg:.2f}",
-         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,fps=30", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
-
-
-def build_video(scenes, audio, srt, out):
-    seg = audio_len(audio) / len(scenes) + 0.1
-    parts = []
-    for i, sc in enumerate(scenes):
-        p = f"{OUT}/seg{i}.mp4"
-        img = make_image(sc["image_prompt"], i)
-        if img:
-            image_clip(img, seg, p)
+    if not hasattr(gemini_image, "models"):
+        names = []
+        try:
+            r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
+                             params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
+            for m in r.json().get("models", []):
+                n = m["name"].split("/")[-1]
+                if "image" in n and "generateContent" in m.get("supportedGenerationMethods", []):
+                    names.append(n)
+        except Exception as e:
+            print("Could not list Gemini image models:", e)
+        gemini_image.models = sorted(names, reverse=True)[:2]
+    for model in gemini_image.models:
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": full}]}],
+                  "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}},
+            timeout=120,
+        )
+        if r.ok:
+            for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return base64.b64decode(inline["data"])
+            print("Gemini image gave no picture:", model)
         else:
-            print("Using stock footage for scene", i)
-            raw = None
-            for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
-                try:
-                    raw = fetch_clip(kw, i)
-                except Exception as e:
-                    print("Clip problem for", kw, e)
-                if raw:
-                    break
-            if not raw:
-                raise RuntimeError("No image and no stock clip for scene %d" % i)
-            stock_clip(raw, seg, p)
-        parts.append(p)
-        time.sleep(2)
-    with open(f"{OUT}/list.txt", "w") as f:
-        f.writelines(f"file '{os.path.abspath(p)}'\n" for p in parts)
-    base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
-            "-i", audio, "-map", "0:v", "-map", "1:a"]
-    tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
-    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=13,Bold=1,"
-             "Outline=2,Shadow=0,MarginV=45")
-    try:
-        run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
-    except subprocess.CalledProcessError:
-        print("Subtitles failed, building video without them")
-        run(base + tail)
-
-
-# ---------- 5. YouTube ----------
-def youtube():
-    creds = Credentials(
-        None,
-        refresh_token=os.environ["YT_REFRESH_TOKEN"].strip(),
-        client_id=os.environ["YT_CLIENT_ID"].strip(),
-        client_secret=os.environ["YT_CLIENT_SECRET"].strip(),
-        token_uri="https://oauth2.googleapis.com/token",
-        scopes=SCOPES,
-    )
-    creds.refresh(Request())
-    return build("youtube", "v3", credentials=creds)
-
-
-def upload(path, meta, name):
-    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
-    body = {
-        "snippet": {
-            "title": meta["title"][:88] + " #Shorts",
-            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
-                           "in Urdu. AI-assisted narration and images; please correct us if we "
-                           "make a mistake. #Shorts #IslamicStories #Prophets #Urdu",
-            "tags": tags,
-            "categoryId": "27",
-            "defaultAudioLanguage": "ur",
-        },
-        "status": {
-            "privacyStatus": PRIVACY,
-            "selfDeclaredMadeForKids": False,
-            "containsSyntheticMedia": True,
-        },
-    }
-    req = youtube().videos().insert(
-        part="snippet,status", body=body,
-        media_body=MediaFileUpload(path, resumable=True))
-    resp = None
-    while resp is None:
-        _, resp = req.next_chunk()
-    return resp["id"]
-
-
-if __name__ == "__main__":
-    name, episode = todays_prophet()
-    print("Prophet:", name, "| episode", episode)
-    meta = write_script(name, episode)
-    print("Story:", meta.get("topic"), "|", meta["title"])
-    audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
-    words = make_voice(meta["script"], audio)
-    make_srt(words, meta["script"], audio_len(audio), srt)
-    build_video(meta["scenes"], audio, srt, final)
-    vid = upload(final, meta, name)
-    print("Uploaded: https://youtube.com/watch?v=" + vid)
+            print("Gemini image problem:", model, r.status_code, r.text[:150])
+            i
