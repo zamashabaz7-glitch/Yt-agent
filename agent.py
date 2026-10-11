@@ -222,11 +222,15 @@ def ask_groq(prompt):
 
 def write_script(name, episode):
     prompt = build_prompt(name, episode)
-    meta = ask_gemini(prompt) or ask_groq(prompt)
+    
+    # Try Groq first to bypass Gemini quota limits, then fallback to Gemini
+    meta = ask_groq(prompt) or ask_gemini(prompt)
+    
     if not meta:
-        raise RuntimeError("Gemini and backup AI both failed.")
+        raise RuntimeError("Gemini and backup AI both failed due to quota limits or network errors. Try again in a few minutes.")
     meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
     return meta
+
 
 
 # ---------- 3. Voice + Subtitles ----------
