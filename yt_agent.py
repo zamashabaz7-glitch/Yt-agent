@@ -1,11 +1,11 @@
 """
-Cloud version: runs on GitHub Actions, no computer needed.
+Islamic prophets stories - YouTube Shorts agent (runs on GitHub Actions).
 Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
 Optional secret: GROQ_API_KEY (free backup AI)
-Optional env: GEO (default IN), PRIVACY (default private)
+Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf)
 """
-import asyncio, json, os, subprocess, time, requests, feedparser, edge_tts
+import asyncio, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -14,9 +14,8 @@ from googleapiclient.http import MediaFileUpload
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GEO = os.getenv("GEO", "IN")
 PRIVACY = os.getenv("PRIVACY", "private")
-VOICE = os.getenv("VOICE", "en-US-AriaNeural")
+VOICE = os.getenv("VOICE", "en-US-GuyNeural")
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 OUT = "work"
 os.makedirs(OUT, exist_ok=True)
@@ -29,30 +28,45 @@ def run(cmd):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 
-# ---------- 1. Trends ----------
-def get_trends():
-    feed = feedparser.parse(f"https://trends.google.com/trending/rss?geo={GEO}")
-    topics = [e.title for e in feed.entries[:8] if e.get("title")]
-    if not topics:
-        raise RuntimeError("No trends found")
-    return topics
+# ---------- 1. Which prophet today ----------
+PROPHETS = [
+    "Adam", "Idris", "Nuh", "Hud", "Salih", "Ibrahim", "Lut", "Ismail",
+    "Ishaq", "Yaqub", "Yusuf", "Ayyub", "Shuayb", "Musa", "Harun",
+    "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
+    "Zakariya", "Yahya", "Isa", "Muhammad",
+]
+START = datetime.date(2026, 10, 12)  # day 0 = Adam, then one prophet per day
+
+
+def todays_prophet():
+    forced = os.getenv("PROPHET", "").strip()
+    n = max((datetime.date.today() - START).days, 0)
+    name = forced if forced else PROPHETS[n % len(PROPHETS)]
+    episode = n // len(PROPHETS) + 1
+    return name, episode
 
 
 # ---------- 2. Script (Gemini, then Groq as backup) ----------
-def build_prompt(topics):
-    lst = "\n".join(f"- {t}" for t in topics)
+def build_prompt(name, episode):
     return (
-        "You write YouTube Shorts for a general audience.\n"
-        f"Today's trending searches:\n{lst}\n\n"
-        "Pick ONE topic that is interesting, safe and easy to explain. Avoid deaths, "
-        "tragedies, crime, adult content, and anything you cannot explain accurately "
-        "without guessing. If a trend is only a brand or app name, prefer another one.\n"
-        "Write a 45-second script (110 to 130 words) about it in English, even if the "
-        "topic is in another language. Be factual, no unverified claims, no emojis, "
-        "no hashtags, no stage directions. Start with a strong hook.\n"
-        "Return JSON with keys: topic, title (max 80 chars), description, "
-        "script (spoken words only), keywords (4 short English stock-footage "
-        "search terms with concrete visuals)."
+        "You write short narrated Islamic story videos (YouTube Shorts) for a "
+        "respectful family audience.\n"
+        f"Subject: Prophet {name} (peace be upon him). This is episode {episode} of the "
+        f"series about him: tell the number {episode} major event of his story in "
+        "chronological order (if he has fewer, pick a lesser-known event).\n"
+        "Rules:\n"
+        "- Use only events clearly stated in the Quran or authentic Islamic sources. "
+        "Do NOT invent dialogue, names, numbers or details. If unsure, leave it out.\n"
+        "- Say 'peace be upon him' after the prophet's name the first time.\n"
+        "- Calm, respectful narrator tone. Start with a hook. End with one short lesson.\n"
+        "- 110 to 130 words, plain English, no emojis, no hashtags, no stage directions.\n"
+        "- Never describe the prophet's face or appearance.\n"
+        "Return JSON with keys: topic, story_title (max 50 chars, no prophet name), "
+        "description (2 short sentences, then 'Source: ' followed by Surah names only), "
+        "script (spoken words only), keywords (4 short English search terms for stock "
+        "footage of NATURE or PLACES only, such as desert dunes, night sky stars, ocean "
+        "waves, mountains, rain, sunrise, olive trees, cave, ancient ruins. "
+        "NO people, no faces)."
     )
 
 
@@ -60,7 +74,7 @@ def parse_meta(text):
     data = json.loads(text)
     if isinstance(data, list):
         data = data[0]
-    for k in ("title", "description", "script", "keywords"):
+    for k in ("story_title", "description", "script", "keywords"):
         if k not in data:
             raise ValueError("missing key: " + k)
     if isinstance(data["keywords"], str):
@@ -186,11 +200,12 @@ def ask_groq(prompt):
     return None
 
 
-def write_script(topics):
-    prompt = build_prompt(topics)
+def write_script(name, episode):
+    prompt = build_prompt(name, episode)
     meta = ask_gemini(prompt) or ask_groq(prompt)
     if not meta:
         raise RuntimeError("Gemini and the backup AI both failed. Try again later.")
+    meta["title"] = f"Prophet {name} (AS): {meta['story_title']}"
     return meta
 
 
@@ -284,7 +299,7 @@ def fetch_clip(keyword, i):
 
 def build_video(keywords, audio, srt, out):
     clips = []
-    for k in list(keywords) + ["technology background", "city lights", "abstract motion"]:
+    for k in list(keywords) + ["desert dunes", "night sky stars", "sunrise mountains"]:
         if len(clips) >= 4:
             break
         try:
@@ -335,8 +350,8 @@ def upload(path, meta):
     tags = [str(k)[:30] for k in meta.get("keywords", [])][:10]
     body = {
         "snippet": {
-            "title": meta["title"][:90] + " #Shorts",
-            "description": meta["description"] + "\n\nMade with AI. #Shorts",
+            "title": meta["title"][:88] + " #Shorts",
+            "description": meta["description"] + "\n\nIslamic stories of the Prophets (peace be upon them). AI-assisted narration; please correct us if we make a mistake. #Shorts #IslamicStories #Prophets",
             "tags": tags,
             "categoryId": "25",
         },
@@ -356,10 +371,10 @@ def upload(path, meta):
 
 
 if __name__ == "__main__":
-    topics = get_trends()
-    print("Trends:", topics)
-    meta = write_script(topics)
-    print("Chosen:", meta.get("topic"), "|", meta["title"])
+    name, episode = todays_prophet()
+    print("Prophet:", name, "| episode", episode)
+    meta = write_script(name, episode)
+    print("Story:", meta.get("topic"), "|", meta["title"])
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
     words = make_voice(meta["script"], audio)
     make_srt(words, meta["script"], audio_len(audio), srt)
