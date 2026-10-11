@@ -1,11 +1,12 @@
 """
-Islamic prophets stories - YouTube Shorts agent (runs on GitHub Actions).
+Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
 Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
 Optional secret: GROQ_API_KEY (free backup AI)
 Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf)
 """
 import asyncio, datetime, json, os, subprocess, time, requests, edge_tts
+from urllib.parse import quote
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -15,7 +16,10 @@ GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 PRIVACY = os.getenv("PRIVACY", "private")
-VOICE = os.getenv("VOICE", "en-US-GuyNeural")
+VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
+LANG = os.getenv("LANG_CODE", "ur")
+STYLE = ("children's storybook illustration, soft watercolor cartoon style, warm glowing "
+         "colors, vertical composition, no people, no human figures, no faces, no text, no letters")
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 OUT = "work"
 os.makedirs(OUT, exist_ok=True)
@@ -49,7 +53,7 @@ def todays_prophet():
 # ---------- 2. Script (Gemini, then Groq as backup) ----------
 def build_prompt(name, episode):
     return (
-        "You write short narrated Islamic story videos (YouTube Shorts) for a "
+        "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
         "respectful family audience.\n"
         f"Subject: Prophet {name} (peace be upon him). This is episode {episode} of the "
         f"series about him: tell the number {episode} major event of his story in "
@@ -57,16 +61,22 @@ def build_prompt(name, episode):
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
         "Do NOT invent dialogue, names, numbers or details. If unsure, leave it out.\n"
-        "- Say 'peace be upon him' after the prophet's name the first time.\n"
-        "- Calm, respectful narrator tone. Start with a hook. End with one short lesson.\n"
-        "- 110 to 130 words, plain English, no emojis, no hashtags, no stage directions.\n"
+        "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
+        "first time say the honorific (alayhis salaam in Urdu script; for Prophet "
+        "Muhammad say sallallahu alayhi wasallam in Urdu script).\n"
+        "- 90 to 110 words. Calm, respectful tone. Start with a hook. End with one "
+        "short lesson. No emojis, no hashtags, no stage directions.\n"
         "- Never describe the prophet's face or appearance.\n"
-        "Return JSON with keys: topic, story_title (max 50 chars, no prophet name), "
-        "description (2 short sentences, then 'Source: ' followed by Surah names only), "
-        "script (spoken words only), keywords (4 short English search terms for stock "
-        "footage of NATURE or PLACES only, such as desert dunes, night sky stars, ocean "
-        "waves, mountains, rain, sunrise, olive trees, cave, ancient ruins. "
-        "NO people, no faces)."
+        "Return JSON with keys: topic (English), title_ur (Urdu, max 45 chars, includes "
+        "the prophet's name with honorific), description_ur (2 short Urdu sentences, then "
+        "'Source: ' followed by Surah names in English), script (Urdu narration only), "
+        "scenes (a list of exactly 6 objects in story order, each with image_prompt in "
+        "ENGLISH and stock_keyword in English). image_prompt describes one peaceful "
+        "scene made only of places, nature, objects and light, such as desert at "
+        "sunrise, night sky full of stars, a wooden ark on a calm sea, a well in the "
+        "desert, mountain cave, olive trees, a river, rain clouds. NEVER include people, "
+        "prophets, angels or faces. stock_keyword is a 2-3 word real-world version of "
+        "the scene, such as 'desert sunrise'."
     )
 
 
@@ -74,11 +84,20 @@ def parse_meta(text):
     data = json.loads(text)
     if isinstance(data, list):
         data = data[0]
-    for k in ("story_title", "description", "script", "keywords"):
+    for k in ("title_ur", "description_ur", "script", "scenes"):
         if k not in data:
             raise ValueError("missing key: " + k)
-    if isinstance(data["keywords"], str):
-        data["keywords"] = [data["keywords"]]
+    scenes = []
+    for sc in data["scenes"]:
+        if isinstance(sc, str):
+            sc = {"image_prompt": sc, "stock_keyword": "desert sunrise"}
+        scenes.append({
+            "image_prompt": str(sc.get("image_prompt", "desert at sunrise")),
+            "stock_keyword": str(sc.get("stock_keyword", "desert sunrise")),
+        })
+    if len(scenes) < 3:
+        raise ValueError("too few scenes")
+    data["scenes"] = scenes[:6]
     return data
 
 
@@ -205,7 +224,7 @@ def write_script(name, episode):
     meta = ask_gemini(prompt) or ask_groq(prompt)
     if not meta:
         raise RuntimeError("Gemini and the backup AI both failed. Try again later.")
-    meta["title"] = f"Prophet {name} (AS): {meta['story_title']}"
+    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS)"
     return meta
 
 
@@ -235,7 +254,7 @@ def make_voice(text, path):
     except Exception as e:
         print("edge-tts failed, using gTTS:", e)
     from gtts import gTTS  # fallback if Microsoft blocks cloud IPs
-    gTTS(text).save(path)
+    gTTS(text, lang=LANG).save(path)
     return []
 
 
@@ -276,7 +295,29 @@ def make_srt(words, text, total, path, per_line=4):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
 
 
-# ---------- 4. Video ----------
+# ---------- 4. Video (AI cartoon images, stock footage as backup) ----------
+def make_image(prompt, i):
+    """Free AI image (Pollinations, no key needed). Returns a file path or None."""
+    full = f"{STYLE}. {prompt}"
+    path = f"{OUT}/img{i}.jpg"
+    for attempt in range(3):
+        try:
+            r = requests.get(
+                "https://image.pollinations.ai/prompt/" + quote(full),
+                params={"width": 768, "height": 1344, "nologo": "true", "seed": 100 + i},
+                timeout=150,
+            )
+            if r.ok and r.headers.get("content-type", "").startswith("image") and len(r.content) > 20000:
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                return path
+            print("Image problem:", i, r.status_code, r.headers.get("content-type"))
+        except Exception as e:
+            print("Image error:", i, e)
+        time.sleep(10 * (attempt + 1))
+    return None
+
+
 def fetch_clip(keyword, i):
     r = requests.get(
         "https://pixabay.com/api/videos/",
@@ -297,34 +338,51 @@ def fetch_clip(keyword, i):
     return path
 
 
-def build_video(keywords, audio, srt, out):
-    clips = []
-    for k in list(keywords) + ["desert dunes", "night sky stars", "sunrise mountains"]:
-        if len(clips) >= 4:
-            break
-        try:
-            c = fetch_clip(k, len(clips))
-        except Exception as e:
-            print("Clip problem for", k, e)
-            c = None
-        if c:
-            clips.append(c)
-    if not clips:
-        raise RuntimeError("No stock clips found")
-    seg = audio_len(audio) / len(clips) + 0.1
+def image_clip(img, seg, out):
+    frames = max(int(seg * 30), 30)
+    run(["ffmpeg", "-y", "-i", img, "-vf",
+         "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
+         f"zoompan=z='min(zoom+0.0006,1.2)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+         f":d={frames}:s=1080x1920:fps=30",
+         "-t", f"{seg:.2f}", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
+
+
+def stock_clip(raw, seg, out):
+    run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", raw, "-t", f"{seg:.2f}",
+         "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,fps=30", "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", out])
+
+
+def build_video(scenes, audio, srt, out):
+    seg = audio_len(audio) / len(scenes) + 0.1
     parts = []
-    for i, c in enumerate(clips):
+    for i, sc in enumerate(scenes):
         p = f"{OUT}/seg{i}.mp4"
-        run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", c, "-t", f"{seg:.2f}",
-             "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
-                    "crop=1080:1920,fps=30", "-an", "-c:v", "libx264", p])
+        img = make_image(sc["image_prompt"], i)
+        if img:
+            image_clip(img, seg, p)
+        else:
+            print("Using stock footage for scene", i)
+            raw = None
+            for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
+                try:
+                    raw = fetch_clip(kw, i)
+                except Exception as e:
+                    print("Clip problem for", kw, e)
+                if raw:
+                    break
+            if not raw:
+                raise RuntimeError("No image and no stock clip for scene %d" % i)
+            stock_clip(raw, seg, p)
         parts.append(p)
+        time.sleep(2)
     with open(f"{OUT}/list.txt", "w") as f:
         f.writelines(f"file '{os.path.abspath(p)}'\n" for p in parts)
     base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
             "-i", audio, "-map", "0:v", "-map", "1:a"]
     tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
-    style = "Alignment=2,FontSize=11,Bold=1,Outline=2,Shadow=0,MarginV=45"
+    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=13,Bold=1,"
+             "Outline=2,Shadow=0,MarginV=45")
     try:
         run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
     except subprocess.CalledProcessError:
@@ -346,14 +404,17 @@ def youtube():
     return build("youtube", "v3", credentials=creds)
 
 
-def upload(path, meta):
-    tags = [str(k)[:30] for k in meta.get("keywords", [])][:10]
+def upload(path, meta, name):
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
     body = {
         "snippet": {
             "title": meta["title"][:88] + " #Shorts",
-            "description": meta["description"] + "\n\nIslamic stories of the Prophets (peace be upon them). AI-assisted narration; please correct us if we make a mistake. #Shorts #IslamicStories #Prophets",
+            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
+                           "in Urdu. AI-assisted narration and images; please correct us if we "
+                           "make a mistake. #Shorts #IslamicStories #Prophets #Urdu",
             "tags": tags,
-            "categoryId": "25",
+            "categoryId": "27",
+            "defaultAudioLanguage": "ur",
         },
         "status": {
             "privacyStatus": PRIVACY,
@@ -378,6 +439,6 @@ if __name__ == "__main__":
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
     words = make_voice(meta["script"], audio)
     make_srt(words, meta["script"], audio_len(audio), srt)
-    build_video(meta["keywords"], audio, srt, final)
-    vid = upload(final, meta)
+    build_video(meta["scenes"], audio, srt, final)
+    vid = upload(final, meta, name)
     print("Uploaded: https://youtube.com/watch?v=" + vid)
