@@ -340,7 +340,7 @@ def gemini_image(full):
         try:
             r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
                              params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
-           for m in r.json().get("models", []):
+            for m in r.json().get("models", []):
                 n = m["name"].split("/")[-1]
                 if "image" in n and "generateContent" in m.get("supportedGenerationMethods", []):
                     names.append(n)
