@@ -162,6 +162,8 @@ def youtube():
         token_uri="https://oauth2.googleapis.com/token",
         scopes=SCOPES,
     )
+        print("client id starts:", os.environ["YT_CLIENT_ID"].strip()[:25])
+    print("token starts:", os.environ["YT_REFRESH_TOKEN"].strip()[:4])
     creds.refresh(Request())
     return build("youtube", "v3", credentials=creds)
 
