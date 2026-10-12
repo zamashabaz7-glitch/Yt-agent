@@ -18,7 +18,7 @@ CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
-VOICE = os.getenv("VOICE", "ur-PK-UmerNeural")  # Deep storytelling voice
+VOICE = os.getenv("VOICE", "ur-PK-UmerNeural")  # Deep human-like storytelling voice
 LANG = os.getenv("LANG_CODE", "ur")
 
 EPISODES_PER_PROPHET = 5
@@ -75,7 +75,7 @@ def todays_prophets_and_episodes():
     return name, episode
 
 
-# ---------- 2. Script & Storyboard Generation ----------
+# ---------- 2. Script & Storyboard Generation (Natural Pauses) ----------
 def build_prompt(name, episode):
     return (
         "You are an expert master storyboard artist and Islamic historian creating YouTube Shorts in URDU.\n"
@@ -83,8 +83,9 @@ def build_prompt(name, episode):
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
         "Do NOT invent dialogue, names, numbers or details.\n"
-        "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
-        "first time say the honorific (alayhis salaam in Urdu script).\n"
+        "- Narration in simple, natural Urdu (Urdu script). Use short sentences, commas (،), "
+        "and natural pauses so the voice sounds like a human storyteller reading dramatically. "
+        "After the prophet's name the first time say the honorific (alayhis salaam in Urdu script).\n"
         "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
         "End with one short moral lesson. No emojis, no hashtags, no stage directions.\n"
         "- NEVER describe or show the prophet's face or features.\n"
@@ -184,12 +185,13 @@ def write_script(name, episode):
     return meta
 
 
-# ---------- 3. Voice + subtitles ----------
+# ---------- 3. Natural Human-like Voice & Subtitles ----------
 async def _tts(text, path):
     try:
-        comm = edge_tts.Communicate(text, VOICE, boundary="WordBoundary")
+        # Slower rate (-4%) makes the narration sound deliberate and human
+        comm = edge_tts.Communicate(text, VOICE, rate="-4%", pitch="+0Hz", boundary="WordBoundary")
     except TypeError:
-        comm = edge_tts.Communicate(text, VOICE)
+        comm = edge_tts.Communicate(text, VOICE, rate="-4%", pitch="+0Hz")
     words = []
     with open(path, "wb") as f:
         async for ch in comm.stream():
