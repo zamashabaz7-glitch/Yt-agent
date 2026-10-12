@@ -18,7 +18,7 @@ CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
 
-# Switched to a deeply expressive, natural-sounding male Urdu storytelling voice
+# Expressive, natural-sounding Urdu storytelling voice
 VOICE = os.getenv("VOICE", "ur-PK-UmerNeural") 
 LANG = os.getenv("LANG_CODE", "ur")
 
@@ -93,7 +93,7 @@ def build_prompt(name, episode):
         "- title_ur (Urdu title, max 45 chars)\n"
         "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
         "- script (Urdu narration only)\n"
-        "- scenes (a list of exactly 10 dictionaries, each containing: 'narration_segment' (Urdu text snippet matching this visual) and 'image_prompt' (detailed cinematic visual description in English), and 'stock_keyword' (short 2-word fallback keyword))."
+        "- scenes (a list of exactly 10 dictionaries, each containing: 'narration_segment' (Urdu text snippet) and 'image_prompt' (detailed cinematic visual description in English), and 'stock_keyword' (short 2-word fallback keyword))."
     )
 
 
@@ -137,10 +137,32 @@ def ask_gemini(prompt):
         print("Gemini error:", e)
     return None
 
+
+def ask_groq(prompt):
+    if not GROQ_KEY:
+        return None
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.7,
+            },
+            timeout=100,
+        )
+        if r.ok:
+            text = r.json()["choices"][0]["message"]["content"]
+            return parse_meta(text)
+    except Exception as e:
+        print("Groq error:", e)
+    return None
+
+
 def write_script(name, episode):
     prompt = build_prompt(name, episode)
-    
-    # Try multiple AI options with a fallback loop
     meta = None
     for attempt in range(3):
         print(f"Attempt {attempt + 1} to generate script...")
@@ -150,17 +172,7 @@ def write_script(name, episode):
         time.sleep(5)
         
     if not meta:
-        raise RuntimeError("AI generation failed after multiple retries. Please check your API keys or quota.")
-    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
-    return meta
-
-
-
-def write_script(name, episode):
-    prompt = build_prompt(name, episode)
-    meta = ask_groq(prompt) or ask_gemini(prompt)
-    if not meta:
-        raise RuntimeError("AI generation failed.")
+        raise RuntimeError("AI generation failed after multiple retries.")
     meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
     return meta
 
@@ -400,9 +412,4 @@ if __name__ == "__main__":
     print(f"Prophet: {name} | Part: {episode}")
     meta = write_script(name, episode)
     print("Story:", meta.get("topic"), "|", meta["title"])
-    audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
-    words = make_voice(meta["script"], audio)
-    make_srt(words, meta["script"], audio_len(audio), srt)
-    build_video(meta["scenes"], audio, srt, final)
-    vid = upload(final, meta, name)
-    print("Uploaded: https://youtube.com/watch?v=" + vid)
+    audio, srt, final = f"{OUT}/voice.mp3", f
