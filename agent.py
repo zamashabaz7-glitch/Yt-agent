@@ -1,8 +1,9 @@
 """
-Urdu Islamic prophets stories - ElevenLabs Studio Voice Shorts Agent (GitHub Actions).
-Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID,
+Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
+Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN
+Optional secrets: GROQ_API_KEY (backup AI), CF_ACCOUNT_ID + CF_API_TOKEN (free AI images)
+Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf), VOICE
 """
 import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
@@ -12,17 +13,15 @@ from googleapiclient.http import MediaFileUpload
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
-ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
-ELEVEN_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM").strip() # Default fallback voice ID
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
+VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
 LANG = os.getenv("LANG_CODE", "ur")
 
-EPISODES_PER_PROPHET = 5
-
+# Cinematic dark-fantasy Islamic cartoon aesthetic styles
 STYLE = (
     "epic cinematic dark fantasy 3D animation style, volumetric divine golden backlighting, "
     "glowing ethereal light aura, dark mystical atmosphere, ultra-detailed textures, "
@@ -47,43 +46,36 @@ def run(cmd):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 
-# ---------- 1. Sequential Prophet & Episode Logic ----------
+# ---------- 1. Which prophet today ----------
 PROPHETS = [
     "Adam", "Idris", "Nuh", "Hud", "Salih", "Ibrahim", "Lut", "Ismail",
     "Ishaq", "Yaqub", "Yusuf", "Ayyub", "Shuayb", "Musa", "Harun",
     "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
     "Zakariya", "Yahya", "Isa", "Muhammad",
 ]
-START = datetime.date(2026, 10, 12)
+START = datetime.date(2026, 10, 12)  # day 0 = Adam, then one prophet per day
 
 
-def todays_prophets_and_episodes():
+def todays_prophet():
     forced = os.getenv("PROPHET", "").strip()
-    days_elapsed = max((datetime.date.today() - START).days, 0)
-    batch_idx = int(os.getenv("BATCH_INDEX", "0"))
-    absolute_video_index = (days_elapsed * 3) + batch_idx
-
-    if forced:
-        name = forced
-        episode = batch_idx + 1
-    else:
-        prophet_idx = (absolute_video_index // EPISODES_PER_PROPHET) % len(PROPHETS)
-        episode = (absolute_video_index % EPISODES_PER_PROPHET) + 1
-        name = PROPHETS[prophet_idx]
-
+    n = max((datetime.date.today() - START).days, 0)
+    name = forced if forced else PROPHETS[n % len(PROPHETS)]
+    episode = n // len(PROPHETS) + 1
     return name, episode
 
 
-# ---------- 2. Script & Storyboard Generation ----------
+# ---------- 2. Script (Gemini, then Groq as backup) ----------
 def build_prompt(name, episode):
     return (
-        "You are an expert master storyboard artist and Islamic historian creating YouTube Shorts in URDU.\n"
-        f"Subject: Prophet {name} (peace be upon him). Part {episode} of {EPISODES_PER_PROPHET} covering his life sequentially.\n"
+        "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
+        "respectful family audience.\n"
+        f"Subject: Prophet {name} (peace be upon him). This is episode {episode} of the "
+        f"series about him: tell the major event of his story in chronological order.\n"
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
-        "Do NOT invent dialogue, names, numbers or details.\n"
-        "- Narration in simple, natural Urdu (Urdu script). Use commas (،) and short clauses for dramatic storytelling cadence. "
-        "After the prophet's name the first time say the honorific (alayhis salaam in Urdu script).\n"
+        "Do NOT invent dialogue, names, numbers or details. If unsure, leave it out.\n"
+        "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
+        "first time say the honorific (alayhis salaam in Urdu script).\n"
         "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
         "End with one short moral lesson. No emojis, no hashtags, no stage directions.\n"
         "- NEVER describe or show the prophet's face or features.\n"
@@ -92,8 +84,11 @@ def build_prompt(name, episode):
         "- title_ur (Urdu title, max 45 chars, includes prophet's name with honorific)\n"
         "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
         "- script (Urdu narration only)\n"
-        "- scenes (a list of exactly 10 distinct scenes in story order, each with image_prompt in "
-        "ENGLISH and stock_keyword in English)."
+        "- scenes (a list of 10 to 12 distinct scenes in story order, each with image_prompt in "
+        "ENGLISH and stock_keyword in English). image_prompt must describe a dramatic, high-detail "
+        "cinematic fantasy scene with strong lighting (e.g., golden heavenly light rays, dark stormy smoke, "
+        "cosmic dust, ancient desert landscapes). If a person appears, show ONLY a small robed figure "
+        "seen from behind or as a glowing silhouette with NO visible face."
     )
 
 
@@ -114,111 +109,119 @@ def parse_meta(text):
         })
     if len(scenes) < 4:
         raise ValueError("too few scenes")
-    data["scenes"] = scenes[:10]
+    data["scenes"] = scenes[:12]
     return data
 
 
+def pick_gemini_models():
+    # Stabilized default models to bypass 404 lookup issues
+    return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash"]
+
+
 def ask_gemini(prompt):
-    try:
-        r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-            params={"key": GEMINI_KEY},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"responseMimeType": "application/json"},
-            },
-            timeout=100,
-        )
-        if r.ok:
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_meta(text)
-        else:
-            print("Gemini API Error Response:", r.status_code, r.text)
-    except Exception as e:
-        print("Gemini exception error:", e)
+    last = ""
+    for model in pick_gemini_models():
+        print("Trying Gemini model:", model)
+        for attempt in range(3):
+            try:
+                r = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                    params={"key": GEMINI_KEY},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json"},
+                    },
+                    timeout=100,
+                )
+            except requests.exceptions.RequestException as e:
+                last = f"{model}: {e}"
+                print("Network/timeout:", last)
+                time.sleep(5)
+                continue
+            if r.ok:
+                try:
+                    return parse_meta(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+                except Exception as e:
+                    last = f"{model}: bad response {e}"
+                    print(last)
+                    continue
+            last = f"{model}: {r.status_code} {r.text[:200]}"
+            print("Gemini problem:", last)
+            if r.status_code in (500, 503, 429):
+                time.sleep(10 * (attempt + 1))
+                continue
+            break
+    print("Gemini failed. Last:", last)
     return None
 
-def write_script(name, episode):
-    prompt = build_prompt(name, episode)
-    meta = None
-    for attempt in range(3):
-        print(f"Attempt {attempt + 1} to generate script...")
-        # Tries Groq first if available, then falls back to Gemini
-        meta = ask_groq(prompt) or ask_gemini(prompt)
-        if meta:
-            break
-        time.sleep(5)
-    if not meta:
-        raise RuntimeError("AI generation failed. Please verify your GEMINI_API_KEY or GROQ_API_KEY.")
-    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
-    return meta
 
-
-def write_script(name, episode):
-    prompt = build_prompt(name, episode)
-    meta = None
-    for attempt in range(3):
-        meta = ask_gemini(prompt)
-        if meta:
-            break
-        time.sleep(5)
-    if not meta:
-        raise RuntimeError("AI generation failed.")
-    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
-    return meta
-
-
-# ---------- 3. Studio-Grade Voiceover (ElevenLabs) ----------
-def make_voice(text, path):
-    """Generates ultra-realistic human speech using ElevenLabs API, falling back to edge-tts if missing."""
-    if ELEVEN_KEY:
+def ask_groq(prompt):
+    if not GROQ_KEY:
+        print("No GROQ_API_KEY set, skipping backup AI")
+        return None
+    headers = {"Authorization": f"Bearer {GROQ_KEY}"}
+    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+        print("Trying Groq model:", model)
         try:
-            print("Generating studio voiceover via ElevenLabs...")
-            url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE}"
-            headers = {
-                "Accept": "audio/mpeg",
-                "Content-Type": "application/json",
-                "xi-api-key": ELEVEN_KEY
-            }
-            payload = {
-                "text": text,
-                "model_id": "eleven_multilingual_v2",
-                "voice_settings": {
-                    "stability": 0.75,
-                    "similarity_boost": 0.85,
-                    "style": 0.2,
-                    "use_speaker_boost": True
-                }
-            }
-            r = requests.post(url, json=payload, headers=headers, timeout=120)
-            if r.ok and len(r.content) > 1000:
-                with open(path, "wb") as f:
-                    f.write(r.content)
-                print("ElevenLabs voice generated successfully!")
-                return [] # No word timings needed; SRT generator will distribute weights evenly
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.7,
+                },
+                timeout=100,
+            )
+            if r.ok:
+                try:
+                    return parse_meta(r.json()["choices"][0]["message"]["content"])
+                except Exception as e:
+                    print("Groq bad response:", e)
             else:
-                print("ElevenLabs API failed, status:", r.status_code, r.text[:150])
+                print("Groq problem:", model, r.status_code, r.text[:200])
         except Exception as e:
-            print("ElevenLabs error:", e)
+            print("Groq network problem:", e)
+    return None
 
-    # Fallback to Edge-TTS if ElevenLabs key is not set
-    print("Falling back to Edge-TTS...")
+
+def write_script(name, episode):
+    prompt = build_prompt(name, episode)
+    meta = ask_gemini(prompt) or ask_groq(prompt)
+    if not meta:
+        raise RuntimeError("Gemini and backup AI both failed.")
+    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS)"
+    return meta
+
+
+# ---------- 3. Voice + subtitles ----------
+async def _tts(text, path):
     try:
-        async def _tts():
-            comm = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-4%")
-            words = []
-            with open(path, "wb") as f:
-                async for ch in comm.stream():
-                    if ch["type"] == "audio":
-                        f.write(ch["data"])
-                    elif ch["type"] == "WordBoundary":
-                        s = ch["offset"] / 1e7
-                        words.append((s, s + ch["duration"] / 1e7, ch["text"]))
+        comm = edge_tts.Communicate(text, VOICE, boundary="WordBoundary")
+    except TypeError:
+        comm = edge_tts.Communicate(text, VOICE)
+    words = []
+    with open(path, "wb") as f:
+        async for ch in comm.stream():
+            if ch["type"] == "audio":
+                f.write(ch["data"])
+            elif ch["type"] == "WordBoundary":
+                s = ch["offset"] / 1e7
+                words.append((s, s + ch["duration"] / 1e7, ch["text"]))
+    return words
+
+
+def make_voice(text, path):
+    try:
+        words = asyncio.run(_tts(text, path))
+        if os.path.getsize(path) > 1000:
             return words
-        return asyncio.run(_tts())
     except Exception as e:
-        print("Edge-TTS failed:", e)
-        return []
+        print("edge-tts failed, using gTTS:", e)
+    from gtts import gTTS
+    gTTS(text, lang=LANG).save(path)
+    return []
 
 
 def audio_len(path):
@@ -258,8 +261,9 @@ def make_srt(words, text, total, path, per_line=3):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
 
 
-# ---------- 4. Video Generation ----------
+# ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
 DEAD = set()
+
 
 def cf_image(full):
     if not (CF_ACCOUNT and CF_TOKEN) or "cf" in DEAD:
@@ -267,10 +271,12 @@ def cf_image(full):
     r = requests.post(
         f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/{CF_MODEL}",
         headers={"Authorization": f"Bearer {CF_TOKEN}"},
-        json={"prompt": full, "negative_prompt": NEGATIVE, "width": 768, "height": 1344, "num_steps": 8},
+        json={"prompt": full, "negative_prompt": NEGATIVE, "width": 768, "height": 1344,
+              "num_steps": 8},
         timeout=120,
     )
     if not r.ok:
+        print("Cloudflare image problem:", r.status_code, r.text[:200])
         if r.status_code in (400, 401, 403, 404, 429):
             DEAD.add("cf")
         return None
@@ -285,33 +291,36 @@ def cf_image(full):
 def gemini_image(full):
     if "gem" in DEAD:
         return None
-    r = requests.post(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-        params={"key": GEMINI_KEY},
-        json={"contents": [{"parts": [{"text": full}]}],
-              "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}},
-        timeout=120,
-    )
-    if r.ok:
-        for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
-            inline = part.get("inlineData") or part.get("inline_data")
-            if inline and inline.get("data"):
-                return base64.b64decode(inline["data"])
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+        r = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            params={"key": GEMINI_KEY},
+            json={"contents": [{"parts": [{"text": full}]}],
+                  "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]}},
+            timeout=120,
+        )
+        if r.ok:
+            for part in r.json().get("candidates", [{}])[0].get("content", {}).get("parts", []):
+                inline = part.get("inlineData") or part.get("inline_data")
+                if inline and inline.get("data"):
+                    return base64.b64decode(inline["data"])
     DEAD.add("gem")
     return None
 
 
 def make_image(prompt, i):
-    full = f"{STYLE}. Storyboard scene depiction: {prompt}"
+    full = f"{STYLE}. {prompt}"
     path = f"{OUT}/img{i}.img"
     for fn in (cf_image, gemini_image):
         try:
             data = fn(full)
-        except Exception:
+        except Exception as e:
+            print("Image error:", fn.__name__, e)
             data = None
         if data and len(data) > 5000:
             with open(path, "wb") as f:
                 f.write(data)
+            print("Image", i, "generated by", fn.__name__)
             return path
     return None
 
@@ -338,7 +347,10 @@ def fetch_clip(keyword, i):
 
 def image_clip(img, seg, out, i=0):
     frames = max(int(seg * 30), 45)
-    z = f"1+0.15*on/{frames}" if i % 2 == 0 else f"1.15-0.15*on/{frames}"
+    if i % 2 == 0:
+        z = f"1+0.15*on/{frames}"
+    else:
+        z = f"1.15-0.15*on/{frames}"
     x_expr = "iw/2-(iw/zoom/2)"
     run(["ffmpeg", "-y", "-i", img, "-vf",
          "scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,"
@@ -362,16 +374,17 @@ def build_video(scenes, audio, srt, out):
         if img:
             image_clip(img, seg, p, i)
         else:
+            print("Using stock backup clip for scene", i)
             raw = None
             for kw in (sc["stock_keyword"], "desert dunes", "night sky stars"):
                 try:
                     raw = fetch_clip(kw, i)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print("Clip error:", e)
                 if raw:
                     break
             if not raw:
-                raise RuntimeError("No media for scene %d" % i)
+                raise RuntimeError("No image or stock clip for scene %d" % i)
             stock_clip(raw, seg, p)
         parts.append(p)
         time.sleep(1)
@@ -385,6 +398,7 @@ def build_video(scenes, audio, srt, out):
     try:
         run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
     except subprocess.CalledProcessError:
+        print("Subtitles failed, building without them")
         run(base + tail)
 
 
@@ -403,11 +417,12 @@ def youtube():
 
 
 def upload(path, meta, name):
-    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories", "Islamic History"]
     body = {
         "snippet": {
             "title": meta["title"][:88] + " #Shorts",
-            "description": meta["description_ur"] + "\n\nStories of the Prophets in Urdu. #Shorts #IslamicStories",
+            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
+                           "in Urdu with cinematic visuals. #Shorts #IslamicStories #Prophets #Urdu",
             "tags": tags,
             "categoryId": "27",
             "defaultAudioLanguage": "ur",
@@ -428,8 +443,8 @@ def upload(path, meta, name):
 
 
 if __name__ == "__main__":
-    name, episode = todays_prophets_and_episodes()
-    print(f"Prophet: {name} | Part: {episode}")
+    name, episode = todays_prophet()
+    print("Prophet:", name, "| episode", episode)
     meta = write_script(name, episode)
     print("Story:", meta.get("topic"), "|", meta["title"])
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
