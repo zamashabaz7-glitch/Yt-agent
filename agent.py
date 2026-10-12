@@ -1,9 +1,8 @@
 """
-Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
-Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY,
+Urdu Islamic prophets stories - ElevenLabs Studio Voice Shorts Agent (GitHub Actions).
+Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY, ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ID,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secrets: GROQ_API_KEY (backup AI), CF_ACCOUNT_ID + CF_API_TOKEN (free AI images)
-Optional env: PRIVACY (default private), PROPHET (force one prophet, e.g. Yusuf), VOICE
+Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN
 """
 import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
@@ -13,17 +12,17 @@ from googleapiclient.http import MediaFileUpload
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
+ELEVEN_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+ELEVEN_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM").strip() # Default fallback voice ID
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
-VOICE = os.getenv("VOICE", "ur-PK-UmerNeural")  # Deep human-like storytelling voice
 LANG = os.getenv("LANG_CODE", "ur")
 
 EPISODES_PER_PROPHET = 5
 
-# Cinematic dark-fantasy Islamic cartoon aesthetic styles
 STYLE = (
     "epic cinematic dark fantasy 3D animation style, volumetric divine golden backlighting, "
     "glowing ethereal light aura, dark mystical atmosphere, ultra-detailed textures, "
@@ -48,14 +47,14 @@ def run(cmd):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 
-# ---------- 1. Sequential Prophet & Episode Logic (3 videos/day) ----------
+# ---------- 1. Sequential Prophet & Episode Logic ----------
 PROPHETS = [
     "Adam", "Idris", "Nuh", "Hud", "Salih", "Ibrahim", "Lut", "Ismail",
     "Ishaq", "Yaqub", "Yusuf", "Ayyub", "Shuayb", "Musa", "Harun",
     "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
     "Zakariya", "Yahya", "Isa", "Muhammad",
 ]
-START = datetime.date(2026, 10, 12)  # day 0 = Adam
+START = datetime.date(2026, 10, 12)
 
 
 def todays_prophets_and_episodes():
@@ -75,7 +74,7 @@ def todays_prophets_and_episodes():
     return name, episode
 
 
-# ---------- 2. Script & Storyboard Generation (Natural Pauses) ----------
+# ---------- 2. Script & Storyboard Generation ----------
 def build_prompt(name, episode):
     return (
         "You are an expert master storyboard artist and Islamic historian creating YouTube Shorts in URDU.\n"
@@ -83,8 +82,7 @@ def build_prompt(name, episode):
         "Rules:\n"
         "- Use only events clearly stated in the Quran or authentic Islamic sources. "
         "Do NOT invent dialogue, names, numbers or details.\n"
-        "- Narration in simple, natural Urdu (Urdu script). Use short sentences, commas (،), "
-        "and natural pauses so the voice sounds like a human storyteller reading dramatically. "
+        "- Narration in simple, natural Urdu (Urdu script). Use commas (،) and short clauses for dramatic storytelling cadence. "
         "After the prophet's name the first time say the honorific (alayhis salaam in Urdu script).\n"
         "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
         "End with one short moral lesson. No emojis, no hashtags, no stage directions.\n"
@@ -95,9 +93,7 @@ def build_prompt(name, episode):
         "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
         "- script (Urdu narration only)\n"
         "- scenes (a list of exactly 10 distinct scenes in story order, each with image_prompt in "
-        "ENGLISH and stock_keyword in English). image_prompt must describe a dramatic, high-detail "
-        "cinematic fantasy scene matching that part of the story. If a person appears, show ONLY a small robed figure "
-        "seen from behind or as a glowing silhouette with NO visible face."
+        "ENGLISH and stock_keyword in English)."
     )
 
 
@@ -134,39 +130,9 @@ def ask_gemini(prompt):
             timeout=100,
         )
         if r.ok:
-            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return parse_meta(text)
-        else:
-            print("Gemini API Error Response:", r.status_code, r.text)
+            return parse_meta(r.json()["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as e:
-        print("Gemini exception error:", e)
-    return None
-
-
-def ask_groq(prompt):
-    if not GROQ_KEY:
-        print("No GROQ_API_KEY set, skipping backup AI")
-        return None
-    headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers=headers,
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.7,
-            },
-            timeout=100,
-        )
-        if r.ok:
-            text = r.json()["choices"][0]["message"]["content"]
-            return parse_meta(text)
-        else:
-            print("Groq API Error Response:", r.status_code, r.text)
-    except Exception as e:
-        print("Groq exception error:", e)
+        print("Gemini error:", e)
     return None
 
 
@@ -174,45 +140,67 @@ def write_script(name, episode):
     prompt = build_prompt(name, episode)
     meta = None
     for attempt in range(3):
-        print(f"Attempt {attempt + 1} to generate script...")
-        meta = ask_groq(prompt) or ask_gemini(prompt)
+        meta = ask_gemini(prompt)
         if meta:
             break
         time.sleep(5)
     if not meta:
-        raise RuntimeError("Gemini and backup AI both failed.")
+        raise RuntimeError("AI generation failed.")
     meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
     return meta
 
 
-# ---------- 3. Natural Human-like Voice & Subtitles ----------
-async def _tts(text, path):
-    try:
-        # Slower rate (-4%) makes the narration sound deliberate and human
-        comm = edge_tts.Communicate(text, VOICE, rate="-4%", pitch="+0Hz", boundary="WordBoundary")
-    except TypeError:
-        comm = edge_tts.Communicate(text, VOICE, rate="-4%", pitch="+0Hz")
-    words = []
-    with open(path, "wb") as f:
-        async for ch in comm.stream():
-            if ch["type"] == "audio":
-                f.write(ch["data"])
-            elif ch["type"] == "WordBoundary":
-                s = ch["offset"] / 1e7
-                words.append((s, s + ch["duration"] / 1e7, ch["text"]))
-    return words
-
-
+# ---------- 3. Studio-Grade Voiceover (ElevenLabs) ----------
 def make_voice(text, path):
+    """Generates ultra-realistic human speech using ElevenLabs API, falling back to edge-tts if missing."""
+    if ELEVEN_KEY:
+        try:
+            print("Generating studio voiceover via ElevenLabs...")
+            url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE}"
+            headers = {
+                "Accept": "audio/mpeg",
+                "Content-Type": "application/json",
+                "xi-api-key": ELEVEN_KEY
+            }
+            payload = {
+                "text": text,
+                "model_id": "eleven_multilingual_v2",
+                "voice_settings": {
+                    "stability": 0.75,
+                    "similarity_boost": 0.85,
+                    "style": 0.2,
+                    "use_speaker_boost": True
+                }
+            }
+            r = requests.post(url, json=payload, headers=headers, timeout=120)
+            if r.ok and len(r.content) > 1000:
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                print("ElevenLabs voice generated successfully!")
+                return [] # No word timings needed; SRT generator will distribute weights evenly
+            else:
+                print("ElevenLabs API failed, status:", r.status_code, r.text[:150])
+        except Exception as e:
+            print("ElevenLabs error:", e)
+
+    # Fallback to Edge-TTS if ElevenLabs key is not set
+    print("Falling back to Edge-TTS...")
     try:
-        words = asyncio.run(_tts(text, path))
-        if os.path.getsize(path) > 1000:
+        async def _tts():
+            comm = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-4%")
+            words = []
+            with open(path, "wb") as f:
+                async for ch in comm.stream():
+                    if ch["type"] == "audio":
+                        f.write(ch["data"])
+                    elif ch["type"] == "WordBoundary":
+                        s = ch["offset"] / 1e7
+                        words.append((s, s + ch["duration"] / 1e7, ch["text"]))
             return words
+        return asyncio.run(_tts())
     except Exception as e:
-        print("edge-tts failed, using gTTS:", e)
-    from gtts import gTTS
-    gTTS(text, lang=LANG).save(path)
-    return []
+        print("Edge-TTS failed:", e)
+        return []
 
 
 def audio_len(path):
@@ -252,9 +240,8 @@ def make_srt(words, text, total, path, per_line=3):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
 
 
-# ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
+# ---------- 4. Video Generation ----------
 DEAD = set()
-
 
 def cf_image(full):
     if not (CF_ACCOUNT and CF_TOKEN) or "cf" in DEAD:
@@ -262,8 +249,7 @@ def cf_image(full):
     r = requests.post(
         f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/{CF_MODEL}",
         headers={"Authorization": f"Bearer {CF_TOKEN}"},
-        json={"prompt": full, "negative_prompt": NEGATIVE, "width": 768, "height": 1344,
-              "num_steps": 8},
+        json={"prompt": full, "negative_prompt": NEGATIVE, "width": 768, "height": 1344, "num_steps": 8},
         timeout=120,
     )
     if not r.ok:
@@ -367,7 +353,7 @@ def build_video(scenes, audio, srt, out):
                 if raw:
                     break
             if not raw:
-                raise RuntimeError("No image or stock clip for scene %d" % i)
+                raise RuntimeError("No media for scene %d" % i)
             stock_clip(raw, seg, p)
         parts.append(p)
         time.sleep(1)
@@ -399,12 +385,11 @@ def youtube():
 
 
 def upload(path, meta, name):
-    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories", "Islamic History"]
+    tags = [f"Prophet {name}", "Islamic stories", "Prophets stories", "Urdu", "Quran stories"]
     body = {
         "snippet": {
             "title": meta["title"][:88] + " #Shorts",
-            "description": meta["description_ur"] + "\n\nStories of the Prophets (peace be upon them) "
-                           "in Urdu with cinematic visuals. #Shorts #IslamicStories #Prophets #Urdu",
+            "description": meta["description_ur"] + "\n\nStories of the Prophets in Urdu. #Shorts #IslamicStories",
             "tags": tags,
             "categoryId": "27",
             "defaultAudioLanguage": "ur",
@@ -426,7 +411,7 @@ def upload(path, meta, name):
 
 if __name__ == "__main__":
     name, episode = todays_prophets_and_episodes()
-    print("Prophet:", name, "| episode", episode)
+    print(f"Prophet: {name} | Part: {episode}")
     meta = write_script(name, episode)
     print("Story:", meta.get("topic"), "|", meta["title"])
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
