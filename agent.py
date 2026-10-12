@@ -130,10 +130,28 @@ def ask_gemini(prompt):
             timeout=100,
         )
         if r.ok:
-            return parse_meta(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return parse_meta(text)
+        else:
+            print("Gemini API Error Response:", r.status_code, r.text)
     except Exception as e:
-        print("Gemini error:", e)
+        print("Gemini exception error:", e)
     return None
+
+def write_script(name, episode):
+    prompt = build_prompt(name, episode)
+    meta = None
+    for attempt in range(3):
+        print(f"Attempt {attempt + 1} to generate script...")
+        # Tries Groq first if available, then falls back to Gemini
+        meta = ask_groq(prompt) or ask_gemini(prompt)
+        if meta:
+            break
+        time.sleep(5)
+    if not meta:
+        raise RuntimeError("AI generation failed. Please verify your GEMINI_API_KEY or GROQ_API_KEY.")
+    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
+    return meta
 
 
 def write_script(name, episode):
