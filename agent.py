@@ -131,32 +131,29 @@ def ask_gemini(prompt):
             timeout=100,
         )
         if r.ok:
-            return parse_meta(r.json()["candidates"][0]["content"]["parts"][0]["text"])
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return parse_meta(text)
     except Exception as e:
         print("Gemini error:", e)
     return None
 
+def write_script(name, episode):
+    prompt = build_prompt(name, episode)
+    
+    # Try multiple AI options with a fallback loop
+    meta = None
+    for attempt in range(3):
+        print(f"Attempt {attempt + 1} to generate script...")
+        meta = ask_groq(prompt) or ask_gemini(prompt)
+        if meta:
+            break
+        time.sleep(5)
+        
+    if not meta:
+        raise RuntimeError("AI generation failed after multiple retries. Please check your API keys or quota.")
+    meta["title"] = f"{meta['title_ur']} | Prophet {name} (AS) Pt {episode}"
+    return meta
 
-def ask_groq(prompt):
-    if not GROQ_KEY:
-        return None
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_KEY}"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.7,
-            },
-            timeout=100,
-        )
-        if r.ok:
-            return parse_meta(r.json()["choices"][0]["message"]["content"])
-    except Exception as e:
-        print("Groq error:", e)
-    return None
 
 
 def write_script(name, episode):
