@@ -64,7 +64,7 @@ def todays_prophet():
     return name, episode
 
 
-# ---------- 2. Script (Gemini, then Groq as backup) ----------
+# ---------- 2. Script Generation ----------
 def build_prompt(name, episode):
     return (
         "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
@@ -114,8 +114,8 @@ def parse_meta(text):
 
 
 def pick_gemini_models():
-    # Stabilized default models to bypass 404 lookup issues
-    return ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash"]
+    # Updated to active, current Google Gemini flash model endpoints
+    return ["gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash"]
 
 
 def ask_gemini(prompt):
@@ -160,7 +160,7 @@ def ask_groq(prompt):
         print("No GROQ_API_KEY set, skipping backup AI")
         return None
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-    for model in ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]:
+    for model in ["llama-3.3-70b-versatile"]:
         print("Trying Groq model:", model)
         try:
             r = requests.post(
@@ -291,7 +291,7 @@ def cf_image(full):
 def gemini_image(full):
     if "gem" in DEAD:
         return None
-    for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+    for model in ["gemini-3.8-flash", "gemini-2.5-flash"]:
         r = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             params={"key": GEMINI_KEY},
