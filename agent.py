@@ -122,7 +122,7 @@ def parse_meta(text):
 def ask_gemini(prompt):
     try:
         r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
             params={"key": GEMINI_KEY},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -148,7 +148,7 @@ def ask_groq(prompt):
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}"},
             json={
-                "model": "llama-3.1-8b-instant",  # Updated to Groq's active high-speed model
+                "model": "llama-3.3-70b-versatile",
                 "messages": [{"role": "user", "content": prompt}],
                 "response_format": {"type": "json_object"},
                 "temperature": 0.7,
@@ -163,6 +163,7 @@ def ask_groq(prompt):
     except Exception as e:
         print("Groq exception error:", e)
     return None
+
 
 
 
