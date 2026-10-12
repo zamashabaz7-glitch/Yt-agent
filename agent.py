@@ -122,7 +122,7 @@ def parse_meta(text):
 def ask_gemini(prompt):
     try:
         r = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
             params={"key": GEMINI_KEY},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
@@ -133,13 +133,15 @@ def ask_gemini(prompt):
         if r.ok:
             text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             return parse_meta(text)
+        else:
+            print("Gemini API Error Response:", r.status_code, r.text)
     except Exception as e:
-        print("Gemini error:", e)
+        print("Gemini exception error:", e)
     return None
-
 
 def ask_groq(prompt):
     if not GROQ_KEY:
+        print("Groq key missing or empty.")
         return None
     try:
         r = requests.post(
@@ -156,9 +158,12 @@ def ask_groq(prompt):
         if r.ok:
             text = r.json()["choices"][0]["message"]["content"]
             return parse_meta(text)
+        else:
+            print("Groq API Error Response:", r.status_code, r.text)
     except Exception as e:
-        print("Groq error:", e)
+        print("Groq exception error:", e)
     return None
+
 
 
 def write_script(name, episode):
