@@ -251,12 +251,12 @@ async def _tts(text, path):
 
 def make_voice(text, path):
     """
-    Generates voiceover audio using ElevenLabs API and saves it to path.
-    Falls back to edge-tts or gTTS if ElevenLabs key is missing or fails.
+    Generates voiceover audio using ElevenLabs API and prints detailed errors if it fails.
     """
     if ELEVEN_KEY:
         try:
-            print("Generating voiceover with ElevenLabs...")
+            print("Attempting ElevenLabs generation...")
+            print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
             client = ElevenLabs(api_key=ELEVEN_KEY)
             
             audio_stream = client.text_to_speech.convert(
@@ -273,11 +273,13 @@ def make_voice(text, path):
                         f.write(chunk)
                         
             if os.path.getsize(path) > 1000:
-                print("ElevenLabs voiceover successfully generated.")
+                print("Success with ElevenLabs!")
                 return []
         except Exception as e:
-            print("ElevenLabs failed, falling back to edge-tts:", e)
+            print("ELEVENLABS ERROR DETAIL:", repr(e))
+            raise e  # Raises the error explicitly so you see it in the GitHub Action log
 
+    print("Falling back to edge-tts...")
     try:
         words = asyncio.run(_tts(text, path))
         if os.path.getsize(path) > 1000:
