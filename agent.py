@@ -1,10 +1,6 @@
 """
 Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
-Supports multi-episode tracking per prophet and daily batch uploads (3 videos/day).
-Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY, ELEVEN_LABS_API_KEY, ELEVEN_VOICE_ID,
-YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN
-Optional env: PRIVACY, PROPHET, BATCH_INDEX (0, 1, or 2 for 3 videos/day)
+Supports multi-episode tracking per prophet and daily continuous history updates (3 videos/day).
 """
 import base64, datetime, json, os, subprocess, time, requests
 from google.auth.transport.requests import Request
@@ -24,8 +20,8 @@ CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightn
 PRIVACY = os.getenv("PRIVACY", "private")
 LANG = os.getenv("LANG_CODE", "ur")
 
-# Total episodes assigned per prophet to thoroughly cover their story before switching
 EPISODES_PER_PROPHET = 5 
+STATE_FILE = "history.json"
 
 STYLE = (
     "epic cinematic dark fantasy 3D animation style, volumetric divine golden backlighting, "
@@ -51,34 +47,79 @@ def run(cmd):
         raise subprocess.CalledProcessError(p.returncode, cmd)
 
 
-# ---------- 1. Sequential Prophet & Episode Logic (3 videos/day) ----------
+# ---------- 1. Continuous State Tracking (Persistent Across Runs) ----------
 PROPHETS = [
     "Adam", "Idris", "Nuh", "Hud", "Salih", "Ibrahim", "Lut", "Ismail",
     "Ishaq", "Yaqub", "Yusuf", "Ayyub", "Shuayb", "Musa", "Harun",
     "Dhul-Kifl", "Dawud", "Sulayman", "Ilyas", "Alyasa", "Yunus",
     "Zakariya", "Yahya", "Isa", "Muhammad",
 ]
-START = datetime.date(2026, 10, 12)  # Base start date
 
-
-def todays_prophets_and_episodes():
+def get_next_prophet_and_episode():
+    """
+    Reads state from history.json so the story continuously advances 
+    forward permanently without ever repeating.
+    """
     forced = os.getenv("PROPHET", "").strip()
-    days_elapsed = max((datetime.date.today() - START).days, 0)
-    batch_idx = int(os.getenv("BATCH_INDEX", "0"))
-    absolute_video_index = (days_elapsed * 3) + batch_idx
-
     if forced:
-        name = forced
-        episode = batch_idx + 1
-    else:
-        prophet_idx = (absolute_video_index // EPISODES_PER_PROPHET) % len(PROPHETS)
-        episode = (absolute_video_index % EPISODES_PER_PROPHET) + 1
-        name = PROPHETS[prophet_idx]
+        # If manually forcing a prophet via workflow input, default to episode 1
+        return forced, 1
 
+    prophet_idx = 0
+    episode = 1
+
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                prophet_idx = data.get("prophet_idx", 0)
+                episode = data.get("episode", 1)
+        except Exception as e:
+            print("Could not read history file, starting from beginning:", e)
+
+    name = PROPHETS[prophet_idx % len(PROPHETS)]
     return name, episode
 
 
-# ---------- 2. Improved Script Generation ----------
+def advance_state():
+    """
+    Increments the episode or moves to the next prophet, 
+    then saves the new state to history.json.
+    """
+    forced = os.getenv("PROPHET", "").strip()
+    if forced:
+        return  # Do not auto-advance state if running a forced manual override
+
+    prophet_idx = 0
+    episode = 1
+
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                prophet_idx = data.get("prophet_idx", 0)
+                episode = data.get("episode", 1)
+        except Exception:
+            pass
+
+    # Advance episode
+    episode += 1
+    if episode > EPISODES_PER_PROPHET:
+        episode = 1
+        prophet_idx += 1
+
+    new_data = {
+        "prophet_idx": prophet_idx,
+        "episode": episode,
+        "last_updated": str(datetime.datetime.utcnow())
+    }
+
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(new_data, f, indent=2)
+    print(f"State advanced successfully. Next run will be Prophet #{prophet_idx}, Ep #{episode}")
+
+
+# ---------- 2. Script Generation ----------
 def build_prompt(name, episode):
     return (
         "You are an expert master storyteller creating high-retention, cinematic YouTube Shorts "
@@ -227,9 +268,6 @@ def write_script(name, episode):
 
 # ---------- 3. ElevenLabs Voice + Subtitles ----------
 def make_voice(text, path):
-    """
-    Generates voiceover strictly using ElevenLabs API.
-    """
     print("Generating voiceover with ElevenLabs...")
     print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
     
@@ -293,7 +331,6 @@ def make_srt(words, text, total, path, per_line=3):
 
 # ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
 DEAD = set()
-
 
 def cf_image(full):
     if not (CF_ACCOUNT and CF_TOKEN) or "cf" in DEAD:
@@ -476,13 +513,24 @@ def upload(path, meta, name):
 
 
 if __name__ == "__main__":
-    name, episode = todays_prophets_and_episodes()
-    print(f"Prophet: {name} | Part: {episode}")
+    name, episode = get_next_prophet_and_episode()
+    print(f"Current Target -> Prophet: {name} | Episode/Part: {episode}")
+    
     meta = write_script(name, episode)
-    print("Story:", meta.get("topic"), "|", meta["title"])
+    print("Story Topic:", meta.get("topic"), "| Title:", meta["title"])
+    
     audio, srt, final = f"{OUT}/voice.mp3", f"{OUT}/subs.srt", f"{OUT}/final.mp4"
     words = make_voice(meta["script"], audio)
     make_srt(words, meta["script"], audio_len(audio), srt)
     build_video(meta["scenes"], audio, srt, final)
+    
     vid = upload(final, meta, name)
-    print("Uploaded: https://youtube.com/watch?v=" + vid)
+    print("Uploaded Successfully: https://youtube.com/watch?v=" + vid)
+    
+    # Permanently advance the state and commit history.json back to GitHub repo
+    advance_state()
+    run(["git", "config", "--global", "user.name", "GitHub Actions Bot"])
+    run(["git", "config", "--global", "user.email", "actions@github.com"])
+    run(["git", "add", STATE_FILE])
+    run(["git", "commit", "-m", f"Auto-advance story state: Prophet {name} Part {episode} [skip ci]"])
+    run(["git", "push"])
