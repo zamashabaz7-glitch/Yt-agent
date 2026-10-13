@@ -1,12 +1,12 @@
 """
 Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
 Supports multi-episode tracking per prophet and daily batch uploads (3 videos/day).
-Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY, ELEVEN_LABS_API_KEY,
+Secrets required: GEMINI_API_KEY, PIXABAY_API_KEY, ELEVEN_LABS_API_KEY, ELEVEN_VOICE_ID,
 YT_CLIENT_ID, YT_CLIENT_SECRET, YT_REFRESH_TOKEN
-Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN, ELEVEN_VOICE_ID
+Optional secrets: GROQ_API_KEY, CF_ACCOUNT_ID + CF_API_TOKEN
 Optional env: PRIVACY, PROPHET, BATCH_INDEX (0, 1, or 2 for 3 videos/day)
 """
-import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
+import base64, datetime, json, os, subprocess, time, requests
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -15,14 +15,13 @@ from elevenlabs.client import ElevenLabs
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
-ELEVEN_KEY = os.environ.get("ELEVEN_LABS_API_KEY", "").strip()
-ELEVEN_VOICE_ID = os.getenv("ELEVEN_VOICE_ID", "21m00Tcm4TlvDq8ikWAM").strip()
+ELEVEN_KEY = os.environ["ELEVEN_LABS_API_KEY"].strip()
+ELEVEN_VOICE_ID = os.environ["ELEVEN_VOICE_ID"].strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
 CF_MODEL = os.getenv("CF_IMAGE_MODEL", "@cf/bytedance/stable-diffusion-xl-lightning")
 PRIVACY = os.getenv("PRIVACY", "private")
-VOICE = os.getenv("VOICE", "ur-PK-AsadNeural")
 LANG = os.getenv("LANG_CODE", "ur")
 
 # Total episodes assigned per prophet to thoroughly cover their story before switching
@@ -63,15 +62,8 @@ START = datetime.date(2026, 10, 12)  # Base start date
 
 
 def todays_prophets_and_episodes():
-    """
-    Calculates 3 unique sequence indices for the current day 
-    (e.g., Videos #1, #2, and #3 uploaded across 3 separate GitHub Action runs).
-    """
     forced = os.getenv("PROPHET", "").strip()
     days_elapsed = max((datetime.date.today() - START).days, 0)
-    
-    # Global video sequence index for today (supports 3 uploads per day)
-    # BATCH_INDEX can be passed via GitHub Actions matrix or workflow input (0, 1, or 2)
     batch_idx = int(os.getenv("BATCH_INDEX", "0"))
     absolute_video_index = (days_elapsed * 3) + batch_idx
 
@@ -86,30 +78,31 @@ def todays_prophets_and_episodes():
     return name, episode
 
 
-# ---------- 2. Script Generation ----------
+# ---------- 2. Improved Script Generation ----------
 def build_prompt(name, episode):
     return (
-        "You write short narrated Islamic story videos (YouTube Shorts) in URDU for a "
-        "respectful family audience.\n"
+        "You are an expert master storyteller creating high-retention, cinematic YouTube Shorts "
+        "about Islamic prophets in pure, elegant URDU for a family audience.\n\n"
         f"Subject: Prophet {name} (peace be upon him). This is PART {episode} of {EPISODES_PER_PROPHET} "
-        f"parts covering his complete life story sequentially. Tell this specific chapter of his journey.\n"
-        "Rules:\n"
-        "- Use only events clearly stated in the Quran or authentic Islamic sources. "
-        "Do NOT invent dialogue, names, numbers or details.\n"
-        "- Narration in simple, natural Urdu (Urdu script). After the prophet's name the "
-        "first time say the honorific (alayhis salaam in Urdu script).\n"
-        "- 110 to 140 words. Calm, emotional, cinematic storytelling tone. Start with a hook. "
-        "End with one short moral lesson. No emojis, no hashtags, no stage directions.\n"
-        "- NEVER describe or show the prophet's face or features.\n"
-        "Return JSON with keys:\n"
-        "- topic (English)\n"
-        "- title_ur (Urdu title, max 45 chars, e.g. Part number and prophet's name with honorific)\n"
-        "- description_ur (2 short Urdu sentences, then 'Source: ' followed by Surah names)\n"
-        "- script (Urdu narration only)\n"
-        "- scenes (a list of 10 to 12 distinct scenes in story order, each with image_prompt in "
-        "ENGLISH and stock_keyword in English). image_prompt must describe a dramatic, high-detail "
-        "cinematic fantasy scene with strong lighting. If a person appears, show ONLY a small robed figure "
-        "seen from behind or as a glowing silhouette with NO visible face."
+        f"sequential parts covering his complete life story. Focus exclusively on this specific chapter.\n\n"
+        "STORYTELLING & SCRIPT RULES:\n"
+        "- Hook: Start the very first sentence with an arresting, powerful hook or question that grips the viewer instantly within the first 3 seconds.\n"
+        "- Tone: Calm, deeply emotional, cinematic, and reverent. Avoid dry history; make it feel immersive and reflective.\n"
+        "- Language: Simple, evocative Urdu (Urdu script). After mentioning the prophet's name the first time, include the honorific (alayhis salaam in Urdu script).\n"
+        "- Length: Exactly 120 to 140 words. Paced perfectly for a 45 to 50-second short.\n"
+        "- Ending: Conclude with a powerful, reflective one-line moral or spiritual lesson.\n"
+        "- Formatting Constraints: NO emojis, NO hashtags, NO stage directions, and NO sound effects text inside the script field.\n"
+        "- STRICT VISUAL RULE: NEVER describe, show, or imply the prophet's face, eyes, features, or direct portrait.\n\n"
+        "VISUAL SCENES RULES:\n"
+        "- Provide 10 to 12 distinct scenes in sequential order.\n"
+        "- image_prompt must be written in ENGLISH and describe epic, cinematic, moody 3D fantasy environments with dramatic golden lighting or atmospheric shadows. If any human figure appears, they must be a small robed figure seen strictly from behind or as a silhouette with NO visible face.\n"
+        "- stock_keyword must be a short, reliable English keyword for fallback stock video matching (e.g., 'dark stormy ocean', 'ancient stone desert', 'golden glowing sunset').\n\n"
+        "Return STRICT JSON with keys:\n"
+        "- topic (English summary)\n"
+        "- title_ur (Urdu title, max 45 chars, highly clickable, including part number and honorific)\n"
+        "- description_ur (2 compelling Urdu sentences driving curiosity, followed by 'Source: ' and relevant Surah/Hadith references)\n"
+        "- script (Pure Urdu narration text only)\n"
+        "- scenes (array of objects, each containing 'image_prompt' and 'stock_keyword')"
     )
 
 
@@ -232,62 +225,32 @@ def write_script(name, episode):
     return meta
 
 
-# ---------- 3. Voice + Subtitles ----------
-async def _tts(text, path):
-    try:
-        comm = edge_tts.Communicate(text, VOICE, boundary="WordBoundary")
-    except TypeError:
-        comm = edge_tts.Communicate(text, VOICE)
-    words = []
-    with open(path, "wb") as f:
-        async for ch in comm.stream():
-            if ch["type"] == "audio":
-                f.write(ch["data"])
-            elif ch["type"] == "WordBoundary":
-                s = ch["offset"] / 1e7
-                words.append((s, s + ch["duration"] / 1e7, ch["text"]))
-    return words
-
-
+# ---------- 3. ElevenLabs Voice + Subtitles ----------
 def make_voice(text, path):
     """
-    Generates voiceover audio using ElevenLabs API and prints detailed errors if it fails.
+    Generates voiceover strictly using ElevenLabs API.
     """
-    if ELEVEN_KEY:
-        try:
-            print("Attempting ElevenLabs generation...")
-            print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
-            client = ElevenLabs(api_key=ELEVEN_KEY)
-            
-            audio_stream = client.text_to_speech.convert(
-                voice_id=ELEVEN_VOICE_ID,
-                optimize_streaming_latency="0",
-                output_format="mp3_44100_128",
-                text=text,
-                model_id="eleven_multilingual_v2"
-            )
-            
-            with open(path, "wb") as f:
-                for chunk in audio_stream:
-                    if chunk:
-                        f.write(chunk)
-                        
-            if os.path.getsize(path) > 1000:
-                print("Success with ElevenLabs!")
-                return []
-        except Exception as e:
-            print("ELEVENLABS ERROR DETAIL:", repr(e))
-            raise e  # Raises the error explicitly so you see it in the GitHub Action log
-
-    print("Falling back to edge-tts...")
-    try:
-        words = asyncio.run(_tts(text, path))
-        if os.path.getsize(path) > 1000:
-            return words
-    except Exception as e:
-        print("edge-tts failed, using gTTS:", e)
-    from gtts import gTTS
-    gTTS(text, lang=LANG).save(path)
+    print("Generating voiceover with ElevenLabs...")
+    print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
+    
+    client = ElevenLabs(api_key=ELEVEN_KEY)
+    
+    audio_stream = client.text_to_speech.convert(
+        voice_id=ELEVEN_VOICE_ID,
+        optimize_streaming_latency="0",
+        output_format="mp3_44100_128",
+        text=text,
+        model_id="eleven_multilingual_v2"
+    )
+    
+    with open(path, "wb") as f:
+        for chunk in audio_stream:
+            if chunk:
+                f.write(chunk)
+                
+    if os.path.getsize(path) < 1000:
+        raise RuntimeError("ElevenLabs generated an empty or invalid audio file.")
+    print("ElevenLabs voiceover successfully generated.")
     return []
 
 
