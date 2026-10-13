@@ -2,16 +2,13 @@ name: Urdu Islamic Prophet Shorts - 3x Daily
 
 on:
   schedule:
-    # 1st Video: Morning (e.g., 6:00 AM UTC) -> BATCH_INDEX 0
     - cron: '0 6 * * *'
-    
-    # 2nd Video: Afternoon (e.g., 12:00 PM UTC) -> BATCH_INDEX 1
     - cron: '0 12 * * *'
-    
-    # 3rd Video: Evening (e.g., 6:00 PM UTC) -> BATCH_INDEX 2
     - cron: '0 18 * * *'
-    
-  workflow_dispatch: # Allows manual testing anytime
+  workflow_dispatch:
+
+permissions:
+  contents: write   # <-- This allows the script to save its progress to history.json automatically
 
 jobs:
   build-and-upload:
