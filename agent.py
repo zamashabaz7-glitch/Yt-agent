@@ -186,7 +186,7 @@ def pick_gemini_models():
         names += sorted(found, reverse=True)
     except Exception as e:
         print("Could not list Gemini models:", e)
-    names += ["gemini-3.8-flash"]
+    names += ["gemini-2.5-flash","gemini-3.8-flash"]
     seen, out = set(), []
     for n in names:
         if n not in seen:
