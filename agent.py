@@ -119,19 +119,17 @@ def advance_state():
     print(f"State advanced successfully. Next run will be Prophet #{prophet_idx}, Ep #{episode}")
 
 
-# ---------- 2. Script Generation ----------
+# ---------- 2. Script Generation (Phonetic Audio Prompt) ----------
 def build_prompt(name, episode):
     return (
         "You are an expert master storyteller creating high-retention, cinematic YouTube Shorts "
-        "about Islamic prophets in pure, elegant URDU for a family audience.\n\n"
+        "about Islamic prophets in URDU, but written using PHONETIC SPELLING for text-to-speech audio.\n\n"
         f"Subject: Prophet {name} (peace be upon him). This is PART {episode} of {EPISODES_PER_PROPHET} "
         f"sequential parts covering his complete life story. Focus exclusively on this specific chapter.\n\n"
-        "STORYTELLING & SCRIPT RULES:\n"
+        "STORYTELLING & AUDIO PRONUNCIATION RULES:\n"
         "- Hook: Start the very first sentence with an arresting, powerful hook or question that grips the viewer instantly within the first 3 seconds.\n"
-        "- Tone: Calm, deeply emotional, cinematic, and reverent. Avoid dry history; make it feel immersive and reflective.\n"
-        "- Language & Pronunciation Guide: Write in simple Urdu script, BUT for proper nouns, prophets' names, and complex Arabic words, "
-        "write them phonetically or spell them out explicitly the way they should sound in spoken Urdu so text-to-speech models pronounce them flawlessly "
-        "(e.g., ensure names like Adam and Sheeth or terms like Firdous use unambiguous phonetic spelling).\n"
+        "- Tone: Calm, deeply emotional, cinematic, and reverent.\n"
+        "- Phonetic Spelling for Audio: Write the words in Roman script using **phonetic spelling** so that an English-trained text-to-speech engine pronounces every Urdu/Arabic word, name, and honorific correctly (for example, write 'Alaihissalam' as 'Alai-he-salaam', 'Adam' as 'Aa-dam', 'Sheeth' as 'Sheeth', 'Firdous' as 'Fir-dous'). Ensure vowels and syllables are clear so there are no spelling or pronunciation mistakes in the voiceover.\n"
         "- Length: Exactly 120 to 140 words. Paced perfectly for a 45 to 50-second short.\n"
         "- Ending: Conclude with a powerful, reflective one-line moral or spiritual lesson.\n"
         "- Formatting Constraints: NO emojis, NO hashtags, NO stage directions, and NO sound effects text inside the script field.\n"
@@ -142,9 +140,9 @@ def build_prompt(name, episode):
         "- stock_keyword must be a short, reliable English keyword for fallback stock video matching (e.g., 'dark stormy ocean', 'ancient stone desert', 'golden glowing sunset').\n\n"
         "Return STRICT JSON with keys:\n"
         "- topic (English summary)\n"
-        "- title_ur (Urdu title, max 45 chars, highly clickable, including part number and honorific)\n"
-        "- description_ur (2 compelling Urdu sentences driving curiosity, followed by 'Source: ' and relevant Surah/Hadith references)\n"
-        "- script (Pure Urdu narration text only)\n"
+        "- title_ur (Catchy title, max 45 chars, including part number)\n"
+        "- description_ur (2 compelling descriptive sentences, followed by 'Source: ' and relevant references)\n"
+        "- script (Phonetic audio narration text only, optimized for clean text-to-speech pronunciation)\n"
         "- scenes (array of objects, each containing 'image_prompt' and 'stock_keyword')"
     )
 
@@ -269,33 +267,17 @@ def write_script(name, episode):
 
 
 # ---------- 3. ElevenLabs Voice + Subtitles ----------
-def clean_script_for_tts(script_text):
-    """
-    Adjusts common mispronounced words or names for ElevenLabs multilingual models.
-    """
-    replacements = {
-        "آدم": "آادَم",
-        "شیث": "شِیث",
-        "علیہ السلام": "عَلَیْہِ السَّلَام",
-    }
-    for target, replacement in replacements.items():
-        script_text = script_text.replace(target, replacement)
-    return script_text
-
-
 def make_voice(text, path):
     print("Generating voiceover with ElevenLabs...")
     print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
     
     client = ElevenLabs(api_key=ELEVEN_KEY)
     
-    processed_text = clean_script_for_tts(text)
-    
     audio_stream = client.text_to_speech.convert(
         voice_id=ELEVEN_VOICE_ID,
         optimize_streaming_latency="0",
         output_format="mp3_44100_128",
-        text=processed_text,
+        text=text,
         model_id="eleven_multilingual_v2"
     )
     
@@ -483,7 +465,7 @@ def build_video(scenes, audio, srt, out):
     base = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", f"{OUT}/list.txt",
             "-i", audio, "-map", "0:v", "-map", "1:a"]
     tail = ["-c:v", "libx264", "-c:a", "aac", "-shortest", out]
-    style = ("FontName=Noto Naskh Arabic,Alignment=2,FontSize=14,PrimaryColour=&H00FFFFFF,"
+    style = ("FontName=Arial,Alignment=2,FontSize=16,PrimaryColour=&H00FFFFFF,"
              "OutlineColour=&H00000000,BackColour=&H80000000,BorderStyle=1,Outline=2,Shadow=1,MarginV=60")
     try:
         run(base + ["-vf", f"subtitles={srt}:force_style='{style}'"] + tail)
