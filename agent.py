@@ -129,7 +129,9 @@ def build_prompt(name, episode):
         "STORYTELLING & SCRIPT RULES:\n"
         "- Hook: Start the very first sentence with an arresting, powerful hook or question that grips the viewer instantly within the first 3 seconds.\n"
         "- Tone: Calm, deeply emotional, cinematic, and reverent. Avoid dry history; make it feel immersive and reflective.\n"
-        "- Language: Simple, evocative Urdu (Urdu script). After mentioning the prophet's name the first time, include the honorific (alayhis salaam in Urdu script).\n"
+        "- Language & Pronunciation Guide: Write in simple Urdu script, BUT for proper nouns, prophets' names, and complex Arabic words, "
+        "write them phonetically or spell them out explicitly the way they should sound in spoken Urdu so text-to-speech models pronounce them flawlessly "
+        "(e.g., ensure names like Adam and Sheeth or terms like Firdous use unambiguous phonetic spelling).\n"
         "- Length: Exactly 120 to 140 words. Paced perfectly for a 45 to 50-second short.\n"
         "- Ending: Conclude with a powerful, reflective one-line moral or spiritual lesson.\n"
         "- Formatting Constraints: NO emojis, NO hashtags, NO stage directions, and NO sound effects text inside the script field.\n"
@@ -267,17 +269,33 @@ def write_script(name, episode):
 
 
 # ---------- 3. ElevenLabs Voice + Subtitles ----------
+def clean_script_for_tts(script_text):
+    """
+    Adjusts common mispronounced words or names for ElevenLabs multilingual models.
+    """
+    replacements = {
+        "آدم": "آادَم",
+        "شیث": "شِیث",
+        "علیہ السلام": "عَلَیْہِ السَّلَام",
+    }
+    for target, replacement in replacements.items():
+        script_text = script_text.replace(target, replacement)
+    return script_text
+
+
 def make_voice(text, path):
     print("Generating voiceover with ElevenLabs...")
     print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
     
     client = ElevenLabs(api_key=ELEVEN_KEY)
     
+    processed_text = clean_script_for_tts(text)
+    
     audio_stream = client.text_to_speech.convert(
         voice_id=ELEVEN_VOICE_ID,
         optimize_streaming_latency="0",
         output_format="mp3_44100_128",
-        text=text,
+        text=processed_text,
         model_id="eleven_multilingual_v2"
     )
     
