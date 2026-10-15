@@ -303,7 +303,6 @@ def make_voice(text, path):
     return float(out.stdout.strip())
 
 
-
 def _ts(t):
     t = max(t, 0)
     ms = int(round(t * 1000))
@@ -332,6 +331,7 @@ def make_srt(words, text, total, path, per_line=3):
     with open(path, "w", encoding="utf-8") as f:
         for n, (a, b, t) in enumerate(lines, 1):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
+
 
 
 
