@@ -119,31 +119,31 @@ def advance_state():
     print(f"State advanced successfully. Next run will be Prophet #{prophet_idx}, Ep #{episode}")
 
 
-# ---------- 2. Script Generation (Phonetic Audio Prompt) ----------
+# ---------- 2. Script Generation (Dynamic Phonetic AI Prompt) ----------
 def build_prompt(name, episode):
     return (
         "You are an expert master storyteller creating high-retention, cinematic YouTube Shorts "
-        "about Islamic prophets in URDU, but written using PHONETIC SPELLING for text-to-speech audio.\n\n"
-        f"Subject: Prophet {name} (peace be upon him). This is PART {episode} of {EPISODES_PER_PROPHET} "
-        f"sequential parts covering his complete life story. Focus exclusively on this specific chapter.\n\n"
-        "STORYTELLING & AUDIO PRONUNCIATION RULES:\n"
-        "- Hook: Start the very first sentence with an arresting, powerful hook or question that grips the viewer instantly within the first 3 seconds.\n"
-        "- Tone: Calm, deeply emotional, cinematic, and reverent.\n"
-        "- Phonetic Spelling for Audio: Write the words in Roman script using **phonetic spelling** so that an English-trained text-to-speech engine pronounces every Urdu/Arabic word, name, and honorific correctly (for example, write 'Alaihissalam' as 'Alai-he-salaam', 'Adam' as 'Aa-dam', 'Sheeth' as 'Sheeth', 'Firdous' as 'Fir-dous'). Ensure vowels and syllables are clear so there are no spelling or pronunciation mistakes in the voiceover.\n"
-        "- Length: Exactly 120 to 140 words. Paced perfectly for a 45 to 50-second short.\n"
-        "- Ending: Conclude with a powerful, reflective one-line moral or spiritual lesson.\n"
-        "- Formatting Constraints: NO emojis, NO hashtags, NO stage directions, and NO sound effects text inside the script field.\n"
-        "- STRICT VISUAL RULE: NEVER describe, show, or imply the prophet's face, eyes, features, or direct portrait.\n\n"
+        "about Islamic prophets in ROMAN URDU optimized for Text-to-Speech (TTS) audio[span_1](start_span)[span_1](end_span).\n\n"
+        f"Subject: Prophet {name} (peace be upon him). This is PART {episode} of {EPISODES_PER_PROPHET}[span_2](start_span)[span_2](end_span) "
+        f"sequential parts covering his complete life story. Focus exclusively on this specific chapter[span_3](start_span)[span_3](end_span).\n\n"
+        "STORYTELLING & DYNAMIC PHONETIC AUDIO RULES:\n"
+        "- Hook: Start the first sentence with a powerful, gripping question or hook within the first 3 seconds.\n"
+        "- Tone: Calm, deeply emotional, cinematic, and reverent[span_4](start_span)[span_4](end_span).\n"
+        "- Dynamic Phonetic Spelling: Write the entire script in Roman Urdu, but whenever you use proper nouns, prophets' names (like Aa-dam, Nooh, I-bra-heem), or Arabic/Islamic terms (like Alai-he-salaam, Fir-dous, Wa-siyat), you MUST spell them out phonetically using clear syllables and hyphens so an English-trained TTS engine reads them with the exact correct pronunciation. Do not use standard complex Arabic script formatting[span_5](start_span)[span_5](end_span).\n"
+        "- Length: Exactly 120 to 140 words[span_6](start_span)[span_6](end_span). Paced perfectly for a 45 to 50-second short[span_7](start_span)[span_7](end_span).\n"
+        "- Ending: Conclude with a powerful, reflective one-line moral or spiritual lesson[span_8](start_span)[span_8](end_span).\n"
+        "- Formatting Constraints: NO emojis, NO hashtags, NO stage directions, and NO sound effects text inside the script field[span_9](start_span)[span_9](end_span).\n"
+        "- STRICT VISUAL RULE: NEVER describe, show, or imply the prophet's face, eyes, features, or direct portrait[span_10](start_span)[span_10](end_span).\n\n"
         "VISUAL SCENES RULES:\n"
-        "- Provide 10 to 12 distinct scenes in sequential order.\n"
-        "- image_prompt must be written in ENGLISH and describe epic, cinematic, moody 3D fantasy environments with dramatic golden lighting or atmospheric shadows. If any human figure appears, they must be a small robed figure seen strictly from behind or as a silhouette with NO visible face.\n"
-        "- stock_keyword must be a short, reliable English keyword for fallback stock video matching (e.g., 'dark stormy ocean', 'ancient stone desert', 'golden glowing sunset').\n\n"
+        "- Provide 10 to 12 distinct scenes in sequential order[span_11](start_span)[span_11](end_span).\n"
+        "- image_prompt must be written in ENGLISH and describe epic, cinematic, moody 3D fantasy environments with dramatic golden lighting or atmospheric shadows. If any human figure appears, they must be a small robed figure seen strictly from behind or as a silhouette with NO visible face[span_12](start_span)[span_12](end_span).\n"
+        "- stock_keyword must be a short, reliable English keyword for fallback stock video matching[span_13](start_span)[span_13](end_span).\n\n"
         "Return STRICT JSON with keys:\n"
-        "- topic (English summary)\n"
-        "- title_ur (Catchy title, max 45 chars, including part number)\n"
-        "- description_ur (2 compelling descriptive sentences, followed by 'Source: ' and relevant references)\n"
-        "- script (Phonetic audio narration text only, optimized for clean text-to-speech pronunciation)\n"
-        "- scenes (array of objects, each containing 'image_prompt' and 'stock_keyword')"
+        "- topic (English summary)[span_14](start_span)[span_14](end_span)\n"
+        "- title_ur (Catchy title, max 45 chars, including part number)[span_15](start_span)[span_15](end_span)\n"
+        "- description_ur (2 compelling descriptive sentences, followed by 'Source: ' and references)[span_16](start_span)[span_16](end_span)\n"
+        "- script (Phonetic Roman Urdu text only, optimized for automated text-to-speech pronunciation)[span_17](start_span)[span_17](end_span)\n"
+        "- scenes (array of objects, each containing 'image_prompt' and 'stock_keyword')[span_18](start_span)[span_18](end_span)"
     )
 
 
@@ -268,7 +268,7 @@ def write_script(name, episode):
 
 # ---------- 3. ElevenLabs Voice + Subtitles ----------
 def make_voice(text, path):
-    print("Generating voiceover with ElevenLabs...")
+    print("Generating voiceover with ElevenLabs using dynamic phonetic script...")
     print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
     
     client = ElevenLabs(api_key=ELEVEN_KEY)
