@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # <-- This allows the script to save its progress to history.json automatically
+  contents: write
 
 jobs:
   build-and-upload:
@@ -16,6 +16,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,7 +37,6 @@ jobs:
       - name: Determine Batch Index based on Trigger Time
         id: set-batch
         run: |
-          # Detects which cron trigger or manual click launched the workflow
           CRON_HOUR=$(date -u +%H)
           echo "Current UTC Hour: $CRON_HOUR"
           
@@ -64,6 +66,6 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          PRIVACY: "public" # Change to "private" if you want to review first
+          PRIVACY: "public"
           BATCH_INDEX: ${{ env.batch }}
         run: python agent.py
