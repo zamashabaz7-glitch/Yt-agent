@@ -273,19 +273,12 @@ def make_voice(text, path):
     
     client = ElevenLabs(api_key=ELEVEN_KEY)
     
-    # Added fine-tuned voice settings for natural human emotion and pacing
     audio_stream = client.text_to_speech.convert(
         voice_id=ELEVEN_VOICE_ID,
         optimize_streaming_latency="0",
         output_format="mp3_44100_128",
         text=text,
-        model_id="eleven_multilingual_v2",
-        voice_settings={
-            "stability": 0.70,         # Lower stability slightly allows more human-like expression
-            "similarity_boost": 0.85,  # Keeps the voice consistent to the cloned profile
-            "style": 0.25,             # Adds subtle dramatic storytelling emphasis
-            "use_speaker_boost": True
-        }
+        model_id="eleven_multilingual_v2"
     )
     
     with open(path, "wb") as f:
@@ -296,7 +289,10 @@ def make_voice(text, path):
     if os.path.getsize(path) < 1000:
         raise RuntimeError("ElevenLabs generated an empty or invalid audio file.")
     print("ElevenLabs voiceover successfully generated.")
-    def audio_len(path):
+    return []
+
+
+def audio_len(path):
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "csv=p=0", path], capture_output=True, text=True, check=True)
@@ -331,9 +327,6 @@ def make_srt(words, text, total, path, per_line=3):
     with open(path, "w", encoding="utf-8") as f:
         for n, (a, b, t) in enumerate(lines, 1):
             f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
-
-
-
 
 
 # ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
