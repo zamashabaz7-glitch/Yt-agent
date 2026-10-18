@@ -266,67 +266,36 @@ def write_script(name, episode):
     return meta
 
 
-# ---------- 3. ElevenLabs Voice + Subtitles ----------
-def make_voice(text, path):
-    print("Generating voiceover with ElevenLabs...")
-    print(f"Using Voice ID: {ELEVEN_VOICE_ID}")
-    
-    client = ElevenLabs(api_key=ELEVEN_KEY)
-    
-    audio_stream = client.text_to_speech.convert(
-        voice_id=ELEVEN_VOICE_ID,
-        optimize_streaming_latency="0",
-        output_format="mp3_44100_128",
-        text=text,
-        model_id="eleven_multilingual_v2"
-    )
-    
+# ---------- 3. Voice (Edge-TTS Stable Fallback) + Subtitles ----------
+async def _tts(text, path):
+    try:
+        comm = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-4%", boundary="WordBoundary")
+    except TypeError:
+        comm = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-4%")
+    words = []
     with open(path, "wb") as f:
-        for chunk in audio_stream:
-            if chunk:
-                f.write(chunk)
-                
-    if os.path.getsize(path) < 1000:
-        raise RuntimeError("ElevenLabs generated an empty or invalid audio file.")
-    print("ElevenLabs voiceover successfully generated.")
+        async for ch in comm.stream():
+            if ch["type"] == "audio":
+                f.write(ch["data"])
+            elif ch["type"] == "WordBoundary":
+                s = ch["offset"] / 1e7
+                words.append((s, s + ch["duration"] / 1e7, ch["text"]))
+    return words
+
+
+def make_voice(text, path):
+    print("Generating voiceover with Edge-TTS...")
+    try:
+        words = asyncio.run(_tts(text, path))
+        if os.path.getsize(path) > 1000:
+            print("Voice generated successfully!")
+            return words
+    except Exception as e:
+        print("edge-tts failed, using gTTS fallback:", e)
+    
+    from gtts import gTTS
+    gTTS(text, lang=LANG).save(path)
     return []
-
-
-def audio_len(path):
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-         "-of", "csv=p=0", path], capture_output=True, text=True, check=True)
-    return float(out.stdout.strip())
-
-
-def _ts(t):
-    t = max(t, 0)
-    ms = int(round(t * 1000))
-    h, ms = divmod(ms, 3600000)
-    m, ms = divmod(ms, 60000)
-    s, ms = divmod(ms, 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-def make_srt(words, text, total, path, per_line=3):
-    if not words:
-        toks = text.split()
-        weights = [len(w) + 1 for w in toks]
-        scale = total / max(sum(weights), 1)
-        t, words = 0.0, []
-        for w, wt in zip(toks, weights):
-            words.append((t, t + wt * scale, w))
-            t += wt * scale
-    lines = []
-    for i in range(0, len(words), per_line):
-        chunk = words[i:i + per_line]
-        start, end = chunk[0][0], chunk[-1][1]
-        if i + per_line < len(words):
-            end = max(end, min(words[i + per_line][0], end + 0.3))
-        lines.append((start, end, " ".join(w[2] for w in chunk)))
-    with open(path, "w", encoding="utf-8") as f:
-        for n, (a, b, t) in enumerate(lines, 1):
-            f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
 
 
 # ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
