@@ -2,17 +2,14 @@
 Urdu Islamic prophets stories - cartoon-style YouTube Shorts agent (GitHub Actions).
 Supports multi-episode tracking per prophet and daily continuous history updates (3 videos/day).
 """
-import base64, datetime, json, os, subprocess, time, requests
+import asyncio, base64, datetime, json, os, subprocess, time, requests, edge_tts
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from elevenlabs.client import ElevenLabs
 
 GEMINI_KEY = os.environ["GEMINI_API_KEY"].strip()
 PIXABAY_KEY = os.environ["PIXABAY_API_KEY"].strip()
-ELEVEN_KEY = os.environ["ELEVEN_LABS_API_KEY"].strip()
-ELEVEN_VOICE_ID = os.environ["ELEVEN_VOICE_ID"].strip()
 GROQ_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "").strip()
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "").strip()
@@ -56,13 +53,8 @@ PROPHETS = [
 ]
 
 def get_next_prophet_and_episode():
-    """
-    Reads state from history.json so the story continuously advances 
-    forward permanently without ever repeating.
-    """
     forced = os.getenv("PROPHET", "").strip()
     if forced:
-        # If manually forcing a prophet via workflow input, default to episode 1
         return forced, 1
 
     prophet_idx = 0
@@ -82,13 +74,9 @@ def get_next_prophet_and_episode():
 
 
 def advance_state():
-    """
-    Increments the episode or moves to the next prophet, 
-    then saves the new state to history.json.
-    """
     forced = os.getenv("PROPHET", "").strip()
     if forced:
-        return  # Do not auto-advance state if running a forced manual override
+        return
 
     prophet_idx = 0
     episode = 1
@@ -102,7 +90,6 @@ def advance_state():
         except Exception:
             pass
 
-    # Advance episode
     episode += 1
     if episode > EPISODES_PER_PROPHET:
         episode = 1
@@ -169,37 +156,14 @@ def parse_meta(text):
 
 
 def pick_gemini_models():
-    names = []
-    if os.getenv("GEMINI_MODEL"):
-        names.append(os.environ["GEMINI_MODEL"])
-    try:
-        r = requests.get(
-            "https://generativelanguage.googleapis.com/v1beta/models",
-            params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
-        found = []
-        for m in r.json().get("models", []):
-            n = m["name"].split("/")[-1]
-            ok = "generateContent" in m.get("supportedGenerationMethods", [])
-            bad = any(x in n for x in ("image", "tts", "live", "audio", "preview", "exp", "lite", "latest"))
-            if ok and n.startswith("gemini") and "flash" in n and not bad:
-                found.append(n)
-        names += sorted(found, reverse=True)
-    except Exception as e:
-        print("Could not list Gemini models:", e)
-    names += ["gemini-2.5-flash","gemini-3.8-flash"]
-    seen, out = set(), []
-    for n in names:
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out[:6]
+    return ["gemini-3.8-flash", "gemini-2.5-flash"]
 
 
 def ask_gemini(prompt):
     last = ""
     for model in pick_gemini_models():
         print("Trying Gemini model:", model)
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 r = requests.post(
                     f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -213,7 +177,7 @@ def ask_gemini(prompt):
             except requests.exceptions.RequestException as e:
                 last = f"{model}: {e}"
                 print("Network/timeout:", last)
-                time.sleep(10)
+                time.sleep(5)
                 continue
             if r.ok:
                 try:
@@ -224,8 +188,8 @@ def ask_gemini(prompt):
                     continue
             last = f"{model}: {r.status_code} {r.text[:200]}"
             print("Gemini problem:", last)
-            if r.status_code in (500, 503):
-                time.sleep(20 * (attempt + 1))
+            if r.status_code in (500, 503, 429):
+                time.sleep(10 * (attempt + 1))
                 continue
             break
     print("Gemini failed. Last:", last)
@@ -236,8 +200,7 @@ def ask_groq(prompt):
     if not GROQ_KEY:
         return None
     headers = {"Authorization": f"Bearer {GROQ_KEY}"}
-    cands = ["llama-3.3-70b-versatile"]
-    for model in cands:
+    for model in ["llama-3.3-70b-versatile"]:
         try:
             r = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
@@ -266,7 +229,7 @@ def write_script(name, episode):
     return meta
 
 
-# ---------- 3. Voice (Edge-TTS Stable Fallback) + Subtitles ----------
+# ---------- 3. Voice (Edge-TTS) + Subtitles ----------
 async def _tts(text, path):
     try:
         comm = edge_tts.Communicate(text, "ur-PK-AsadNeural", rate="-4%", boundary="WordBoundary")
@@ -298,6 +261,43 @@ def make_voice(text, path):
     return []
 
 
+def audio_len(path):
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", path], capture_output=True, text=True, check=True)
+    return float(out.stdout.strip())
+
+
+def _ts(t):
+    t = max(t, 0)
+    ms = int(round(t * 1000))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def make_srt(words, text, total, path, per_line=3):
+    if not words:
+        toks = text.split()
+        weights = [len(w) + 1 for w in toks]
+        scale = total / max(sum(weights), 1)
+        t, words = 0.0, []
+        for w, wt in zip(toks, weights):
+            words.append((t, t + wt * scale, w))
+            t += wt * scale
+    lines = []
+    for i in range(0, len(words), per_line):
+        chunk = words[i:i + per_line]
+        start, end = chunk[0][0], chunk[-1][1]
+        if i + per_line < len(words):
+            end = max(end, min(words[i + per_line][0], end + 0.3))
+        lines.append((start, end, " ".join(w[2] for w in chunk)))
+    with open(path, "w", encoding="utf-8") as f:
+        for n, (a, b, t) in enumerate(lines, 1):
+            f.write(f"{n}\n{_ts(a)} --> {_ts(b)}\n{t}\n\n")
+
+
 # ---------- 4. Video (AI Cartoon Images + Motion Zoom) ----------
 DEAD = set()
 
@@ -326,19 +326,7 @@ def cf_image(full):
 def gemini_image(full):
     if "gem" in DEAD:
         return None
-    if not hasattr(gemini_image, "models"):
-        names = []
-        try:
-            r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
-                             params={"key": GEMINI_KEY, "pageSize": 200}, timeout=30)
-            for m in r.json().get("models", []):
-                n = m["name"].split("/")[-1]
-                if "image" in n and "generateContent" in m.get("supportedGenerationMethods", []):
-                    names.append(n)
-        except Exception:
-            pass
-        gemini_image.models = sorted(names, reverse=True)[:2]
-    for model in gemini_image.models:
+    for model in ["gemini-3.8-flash"]:
         r = requests.post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             params={"key": GEMINI_KEY},
@@ -496,7 +484,6 @@ if __name__ == "__main__":
     vid = upload(final, meta, name)
     print("Uploaded Successfully: https://youtube.com/watch?v=" + vid)
     
-    # Permanently advance the state and commit history.json back to GitHub repo
     advance_state()
     run(["git", "config", "--global", "user.name", "GitHub Actions Bot"])
     run(["git", "config", "--global", "user.email", "actions@github.com"])
